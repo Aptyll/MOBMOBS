@@ -793,6 +793,15 @@ document.addEventListener('keyup', (e) => {
 window.addEventListener('resize', handleResize);
 window.addEventListener('orientationchange', () => setTimeout(handleResize, 200));
 
+// Rotate hint is just a suggestion — let the player dismiss it.
+const rotateHint = document.getElementById('rotateHint');
+if (rotateHint) {
+    rotateHint.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        rotateHint.classList.add('dismissed');
+    });
+}
+
 // ------------------------------------------------------------
 // Boot
 // ------------------------------------------------------------
