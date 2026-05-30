@@ -45,11 +45,14 @@
     <!-- Center messages (countdown / boost / finish) -->
     <div id="centerMessage"></div>
 
-    <!-- Steering joystick (left) -->
+    <!-- Steering + throttle joystick (left): push to steer, push up to throttle -->
     <div id="joystick" class="joystick">
         <div class="joystick-base"></div>
         <div class="joystick-stick"></div>
     </div>
+
+    <!-- Track select / menu button (top-left of controls) -->
+    <button id="menuBtn" aria-label="Tracks">≡ TRACKS</button>
 
     <!-- Fullscreen toggle (top-right) -->
     <button id="fsBtn" aria-label="Fullscreen">⛶</button>
@@ -60,10 +63,21 @@
         <b>Add to Home Screen</b>, and open it from the icon. <span class="tip-x">(tap to hide)</span>
     </div>
 
-    <!-- Pedals (right) -->
-    <div id="pedals">
-        <button id="gasBtn" class="pedal pedal-gas">GAS</button>
-        <button id="brakeBtn" class="pedal pedal-brake">BRAKE</button>
+    <!-- Ability buttons (right) -->
+    <div id="abilities">
+        <button id="nitroBtn" class="ability ability-nitro">
+            <span id="nitroFill"></span>
+            <span class="ability-label">NITRO</span>
+        </button>
+    </div>
+
+    <!-- Track-select menu -->
+    <div id="menu" class="menu">
+        <div class="menu-panel">
+            <h1>MOBMOBS</h1>
+            <p class="menu-sub">Choose your track</p>
+            <div id="trackList" class="track-list"></div>
+        </div>
     </div>
 
     <!-- Rotate-to-landscape hint (portrait only, tap to dismiss) -->
