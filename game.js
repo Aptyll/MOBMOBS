@@ -27,6 +27,10 @@ let boostPads = [];      // { x, z, mesh }
 const BOOST_FRAMES = 90; // duration of a boost
 const BOOST_RADIUS = 5;  // pickup distance
 
+// Ramps (jumps)
+let ramps = [];          // { x, z, tx, tz, rx, rz, L, H, halfW }
+const GRAVITY = 0.05;    // per-frame downward accel while airborne
+
 // Racers (player + AI)
 let racers = [];
 let player = null;
@@ -99,6 +103,8 @@ function initScene() {
     buildWorld();
     buildTrack();
     buildBoostPads();
+    buildRamps();
+    buildFoliage();
     buildRacers();
     placeRacersAtStart();
     updateJoystickCenter();
@@ -271,6 +277,160 @@ function buildBoostPads() {
 }
 
 // ------------------------------------------------------------
+// Ramps (jump pads)
+// ------------------------------------------------------------
+function buildRampMesh(L, H, W) {
+    // Triangular prism: incline rises along +Z from 0 to H over length L,
+    // width W along X. Built as raw geometry so axes are predictable.
+    const hw = W / 2;
+    const LA = [-hw, 0, 0], LB = [-hw, 0, L], LC = [-hw, H, L];
+    const RA = [hw, 0, 0], RB = [hw, 0, L], RC = [hw, H, L];
+    const tris = [
+        // incline (drivable) top
+        LA, RA, RC, LA, RC, LC,
+        // bottom
+        LA, LB, RB, LA, RB, RA,
+        // vertical back face at the lip
+        LB, LC, RC, LB, RC, RB,
+        // left + right side triangles
+        LA, LC, LB, RA, RB, RC
+    ];
+    const verts = [];
+    tris.forEach(v => verts.push(v[0], v[1], v[2]));
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    geo.computeVertexNormals();
+    return geo;
+}
+
+function buildRamps() {
+    ramps = [];
+    const L = 9, H = 3, W = ROAD_WIDTH * 0.85;
+    const fractions = [0.30, 0.68];
+    fractions.forEach(f => {
+        const idx = Math.floor(f * SAMPLES) % SAMPLES;
+        const c = centerPoints[idx];
+        const t = tangents[idx];
+        const angle = Math.atan2(t.x, t.z);
+
+        const geo = buildRampMesh(L, H, W);
+        const yellow = new THREE.MeshLambertMaterial({ color: 0xf4c542, flatShading: true });
+        const mesh = new THREE.Mesh(geo, yellow);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.position.set(c.x, 0, c.z);
+        mesh.rotation.y = angle;
+        scene.add(mesh);
+
+        // warning stripes on the face
+        const stripe = new THREE.Mesh(
+            new THREE.PlaneGeometry(W, 0.8),
+            new THREE.MeshBasicMaterial({ color: 0x222222 })
+        );
+        stripe.rotation.x = -Math.PI / 2;
+        stripe.position.set(0, 0.05, 0.6);
+        mesh.add(stripe);
+
+        ramps.push({
+            x: c.x, z: c.z,
+            tx: t.x, tz: t.z,    // forward (along ramp)
+            rx: t.z, rz: -t.x,   // right (across ramp)
+            L, H, halfW: W / 2
+        });
+    });
+}
+
+// Returns the ramp surface height/climb-rate under a racer, or null.
+function rampUnder(r, hspeed) {
+    let result = null;
+    for (const ramp of ramps) {
+        const dx = r.x - ramp.x, dz = r.z - ramp.z;
+        const along = dx * ramp.tx + dz * ramp.tz;
+        if (along < 0 || along > ramp.L) continue;
+        const lateral = dx * ramp.rx + dz * ramp.rz;
+        if (Math.abs(lateral) > ramp.halfW) continue;
+        const slope = ramp.H / ramp.L;
+        const y = slope * along;
+        if (!result || y > result.y) {
+            result = { y, vy: slope * hspeed };
+        }
+    }
+    return result;
+}
+
+// ------------------------------------------------------------
+// Foliage (hand-painted, low-poly trees + bushes)
+// ------------------------------------------------------------
+function makeTree(x, z, scale) {
+    const g = new THREE.Group();
+    const hueShift = (Math.random() - 0.5) * 0.06;
+
+    // trunk
+    const trunkMat = new THREE.MeshLambertMaterial({ color: 0x7a5230, flatShading: true });
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.55, 2.2, 5), trunkMat);
+    trunk.position.y = 1.1;
+    trunk.castShadow = true;
+    g.add(trunk);
+
+    const green = new THREE.Color().setHSL(0.28 + hueShift, 0.5, 0.38 + Math.random() * 0.08);
+    const leafMat = new THREE.MeshLambertMaterial({ color: green, flatShading: true });
+
+    if (Math.random() < 0.5) {
+        // pine: stacked low-poly cones
+        for (let i = 0; i < 3; i++) {
+            const cone = new THREE.Mesh(new THREE.ConeGeometry(2.0 - i * 0.45, 2.0, 6), leafMat);
+            cone.position.y = 2.6 + i * 1.3;
+            cone.castShadow = true;
+            g.add(cone);
+        }
+    } else {
+        // round tree: a couple of faceted blobs
+        const blob = new THREE.Mesh(new THREE.IcosahedronGeometry(2.1, 0), leafMat);
+        blob.position.y = 3.4;
+        blob.castShadow = true;
+        g.add(blob);
+        const blob2 = new THREE.Mesh(new THREE.IcosahedronGeometry(1.5, 0), leafMat);
+        blob2.position.set(1.0, 2.7, 0.5);
+        blob2.castShadow = true;
+        g.add(blob2);
+    }
+
+    g.position.set(x, 0, z);
+    g.rotation.y = Math.random() * Math.PI * 2;
+    g.scale.setScalar(scale);
+    scene.add(g);
+}
+
+function makeBush(x, z, scale) {
+    const green = new THREE.Color().setHSL(0.3 + (Math.random() - 0.5) * 0.05, 0.45, 0.34);
+    const mat = new THREE.MeshLambertMaterial({ color: green, flatShading: true });
+    const bush = new THREE.Mesh(new THREE.IcosahedronGeometry(1.2, 0), mat);
+    bush.position.set(x, 0.7 * scale, z);
+    bush.scale.setScalar(scale);
+    bush.castShadow = true;
+    scene.add(bush);
+}
+
+function buildFoliage() {
+    // Scatter foliage outside the road on both sides of the track.
+    for (let i = 0; i < SAMPLES; i += 9) {
+        const c = centerPoints[i];
+        const t = tangents[i];
+        const px = -t.z, pz = t.x; // left perpendicular
+        [-1, 1].forEach(side => {
+            if (Math.random() < 0.45) return; // leave gaps
+            const dist = ROAD_HALF + 7 + Math.random() * 55;
+            const jitterX = (Math.random() - 0.5) * 6;
+            const jitterZ = (Math.random() - 0.5) * 6;
+            const x = c.x + px * side * dist + jitterX;
+            const z = c.z + pz * side * dist + jitterZ;
+            if (Math.random() < 0.78) makeTree(x, z, 0.8 + Math.random() * 0.8);
+            else makeBush(x, z, 0.8 + Math.random() * 0.7);
+        });
+    }
+}
+
+// ------------------------------------------------------------
 // Racers
 // ------------------------------------------------------------
 function createCarMesh(color) {
@@ -308,15 +468,17 @@ function makeRacer(opts) {
         mesh: createCarMesh(opts.color),
         baseColor: opts.color,
         isPlayer: !!opts.isPlayer,
-        x: 0, z: 0, heading: 0, speed: 0,
+        x: 0, z: 0, y: 0, heading: 0, speed: 0,
+        vx: 0, vz: 0, vy: 0, airborne: false,
         lap: 1, progress: 0, lastProgress: 0, lastIndex: 0,
         finished: false, finishTime: null, finishOrder: 0,
         boostTime: 0,
         bestLap: null, lapStartTime: 0,
-        // physics tuning
-        accel: 0.012, brakePower: 0.022, reverseAccel: 0.008,
-        drag: 0.985, offTrackDrag: 0.93,
-        maxSpeed: 0.95, maxReverse: -0.35, offTrackMaxSpeed: 0.35,
+        // physics tuning (velocity-vector model = momentum + drift)
+        accel: 0.013, brakePower: 0.024, reverseAccel: 0.008,
+        drag: 0.99, offTrackDrag: 0.965,
+        grip: 0.82, offTrackGrip: 0.9,   // fraction of sideways velocity kept (higher = more slide)
+        maxSpeed: 0.95, offTrackMaxSpeed: 0.6,
         turnRate: 0.045,
         // ai
         skill: opts.skill || 1,
@@ -355,6 +517,7 @@ function placeRacersAtStart() {
         r.z = start.z - t.z * back + pz * side;
         r.heading = heading;
         r.speed = 0;
+        r.vx = 0; r.vz = 0; r.vy = 0; r.y = 0; r.airborne = false;
         r.lap = 1; r.progress = 0; r.lastProgress = 0;
         r.lastIndex = 0; r.finished = false; r.finishTime = null;
         r.boostTime = 0; r.bestLap = null;
@@ -413,44 +576,78 @@ function raceScore(r) {
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 function stepRacer(r, ctrl) {
-    if (r.finished) {
-        r.speed *= 0.9;
-    } else if (race.started) {
-        // throttle
+    const fX = Math.sin(r.heading), fZ = Math.cos(r.heading);
+    let speed = Math.hypot(r.vx, r.vz);
+    let fwd = r.vx * fX + r.vz * fZ;   // signed forward speed
+
+    // Engine + steering only apply with wheels on the ground.
+    if (!r.finished && race.started && !r.airborne) {
         if (ctrl.gas) {
-            r.speed += r.accel;
+            r.vx += fX * r.accel; r.vz += fZ * r.accel;
         } else if (ctrl.brake) {
-            r.speed += (r.speed > 0.01) ? -r.brakePower : -r.reverseAccel;
+            const f = (fwd > 0.02) ? r.brakePower : r.reverseAccel;
+            r.vx -= fX * f; r.vz -= fZ * f;
         }
 
-        // boost
-        let topSpeed = r.offTrack ? r.offTrackMaxSpeed : r.maxSpeed;
         if (r.boostTime > 0) {
             r.boostTime--;
-            topSpeed = Math.max(topSpeed, 1.55);
-            r.speed += 0.02;
+            r.vx += fX * 0.02; r.vz += fZ * 0.02;
         }
 
-        // drag + clamps
-        r.speed *= r.offTrack ? r.offTrackDrag : r.drag;
-        r.speed = clamp(r.speed, r.maxReverse, topSpeed);
-        if (Math.abs(r.speed) < 0.0008) r.speed = 0;
-
-        // steering
-        const speedFactor = Math.min(Math.abs(r.speed) / 0.25, 1);
-        const dir = r.speed >= 0 ? 1 : -1;
+        const speedFactor = Math.min(speed / 0.25, 1);
+        const dir = fwd >= 0 ? 1 : -1;
         r.heading -= ctrl.steer * r.turnRate * speedFactor * dir;
+    } else if (r.finished) {
+        r.vx *= 0.92; r.vz *= 0.92;
     }
 
-    r.x += Math.sin(r.heading) * r.speed;
-    r.z += Math.cos(r.heading) * r.speed;
+    // Grip: keep forward velocity, bleed off sideways velocity. Retaining
+    // some lateral velocity gives the car momentum / a bit of drift.
+    const f2X = Math.sin(r.heading), f2Z = Math.cos(r.heading);
+    fwd = r.vx * f2X + r.vz * f2Z;
+    const latX = r.vx - f2X * fwd, latZ = r.vz - f2Z * fwd;
+    const grip = r.airborne ? 1 : (r.offTrack ? r.offTrackGrip : r.grip);
+    r.vx = f2X * fwd + latX * grip;
+    r.vz = f2Z * fwd + latZ * grip;
+
+    // Drag + top-speed clamp.
+    const drag = r.airborne ? 0.999 : (r.offTrack ? r.offTrackDrag : r.drag);
+    r.vx *= drag; r.vz *= drag;
+    speed = Math.hypot(r.vx, r.vz);
+    let topSpeed = r.offTrack ? r.offTrackMaxSpeed : r.maxSpeed;
+    if (r.boostTime > 0) topSpeed = Math.max(topSpeed, 1.55);
+    if (speed > topSpeed) { r.vx *= topSpeed / speed; r.vz *= topSpeed / speed; }
+    if (speed < 0.0008) { r.vx = 0; r.vz = 0; }
+
+    // Integrate horizontal position.
+    r.x += r.vx; r.z += r.vz;
+
+    // Vertical: ramps lift the car; otherwise gravity/airtime.
+    const hspeed = Math.hypot(r.vx, r.vz);
+    const ramp = rampUnder(r, hspeed);
+    if (ramp) {
+        r.y = ramp.y;
+        r.vy = ramp.vy;     // carried off the lip into a jump
+        r.airborne = false;
+    } else {
+        r.y += r.vy;
+        if (r.y > 0.001) {
+            r.vy -= GRAVITY;
+            r.airborne = true;
+        }
+        if (r.y <= 0) { r.y = 0; r.vy = 0; r.airborne = false; }
+    }
+
+    r.speed = fwd; // forward speed, used by HUD + AI
 }
 
 function applyTransform(r, ctrlSteer) {
-    r.mesh.position.set(r.x, 0, r.z);
+    r.mesh.position.set(r.x, r.y, r.z);
     r.mesh.rotation.y = r.heading;
     const roll = -ctrlSteer * Math.min(Math.abs(r.speed) / r.maxSpeed, 1) * 0.12;
     r.mesh.rotation.z = roll;
+    // nose pitches up/down with vertical velocity when airborne
+    r.mesh.rotation.x = (r.y > 0.05 || r.airborne) ? clamp(-r.vy * 1.2, -0.5, 0.5) : 0;
     // boost tint
     if (r.mesh._bodyMat) {
         r.mesh._bodyMat.emissive = new THREE.Color(r.boostTime > 0 ? 0x00e5ff : 0x000000);
@@ -496,26 +693,38 @@ function checkBoosts(r) {
 }
 
 // ------------------------------------------------------------
-// Collisions (circle vs circle, push apart + dampen)
+// Collisions (circle vs circle) — cars BUMP: push apart and trade
+// momentum along the contact normal instead of just slowing down.
 // ------------------------------------------------------------
 function handleCollisions() {
     const minDist = CAR_RADIUS * 2;
+    const BUMP = 0.06;       // extra shove so contact always knocks cars apart
+    const RESTITUTION = 1.15; // >1 = lively bounce
     for (let i = 0; i < racers.length; i++) {
         for (let j = i + 1; j < racers.length; j++) {
             const a = racers[i], b = racers[j];
             let dx = b.x - a.x, dz = b.z - a.z;
             let dist = Math.hypot(dx, dz);
             if (dist === 0) { dx = 0.01; dist = 0.01; }
-            if (dist < minDist) {
-                const nx = dx / dist, nz = dz / dist;
-                const overlap = (minDist - dist) / 2;
-                a.x -= nx * overlap; a.z -= nz * overlap;
-                b.x += nx * overlap; b.z += nz * overlap;
-                // dampen speeds and trade a little momentum
-                const avg = (a.speed + b.speed) / 2;
-                a.speed = a.speed * 0.6 + avg * 0.2;
-                b.speed = b.speed * 0.6 + avg * 0.2;
+            if (dist >= minDist) continue;
+
+            const nx = dx / dist, nz = dz / dist;
+            const overlap = (minDist - dist) / 2;
+            a.x -= nx * overlap; a.z -= nz * overlap;
+            b.x += nx * overlap; b.z += nz * overlap;
+
+            // velocity components along the normal
+            const an = a.vx * nx + a.vz * nz;
+            const bn = b.vx * nx + b.vz * nz;
+            if (an - bn > 0) {
+                // approaching: exchange normal momentum (equal mass, elastic)
+                const t = (an - bn) * RESTITUTION;
+                a.vx -= t * nx; a.vz -= t * nz;
+                b.vx += t * nx; b.vz += t * nz;
             }
+            // always add a small bump so even gentle touches knock you sideways
+            a.vx -= nx * BUMP; a.vz -= nz * BUMP;
+            b.vx += nx * BUMP; b.vz += nz * BUMP;
         }
     }
 }
@@ -526,10 +735,14 @@ function handleCollisions() {
 function positionCamera(snap) {
     const back = 15, height = 8.5, ahead = 9;
     const fx = Math.sin(player.heading), fz = Math.cos(player.heading);
-    const dest = new THREE.Vector3(player.x - fx * back, height, player.z - fz * back);
+    const dest = new THREE.Vector3(
+        player.x - fx * back,
+        height + player.y * 0.6,   // rise with the car on jumps
+        player.z - fz * back
+    );
     if (snap) camera.position.copy(dest);
     else camera.position.lerp(dest, 0.12);
-    camera.lookAt(player.x + fx * ahead, 1, player.z + fz * ahead);
+    camera.lookAt(player.x + fx * ahead, 1 + player.y * 0.5, player.z + fz * ahead);
 }
 
 // ------------------------------------------------------------
