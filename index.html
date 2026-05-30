@@ -6,6 +6,9 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="MOBMOBS">
+    <meta name="theme-color" content="#87b9e0">
+    <link rel="manifest" href="manifest.json">
     <title>MOBMOBS - Track Racing</title>
     <link rel="stylesheet" href="style.css">
 </head>
@@ -46,6 +49,15 @@
     <div id="joystick" class="joystick">
         <div class="joystick-base"></div>
         <div class="joystick-stick"></div>
+    </div>
+
+    <!-- Fullscreen toggle (top-right) -->
+    <button id="fsBtn" aria-label="Fullscreen">⛶</button>
+
+    <!-- Install-to-home tip (iOS fullscreen) -->
+    <div id="fsTip">
+        For true fullscreen on iPhone: tap <b>Share</b> &#8593; then
+        <b>Add to Home Screen</b>, and open it from the icon. <span class="tip-x">(tap to hide)</span>
     </div>
 
     <!-- Pedals (right) -->

@@ -1,0 +1,11 @@
+{
+    "name": "MOBMOBS Racing",
+    "short_name": "MOBMOBS",
+    "description": "Landscape track racer with boosts and AI opponents.",
+    "display": "fullscreen",
+    "orientation": "landscape",
+    "background_color": "#0a0a0a",
+    "theme_color": "#87b9e0",
+    "start_url": "./",
+    "scope": "./"
+}

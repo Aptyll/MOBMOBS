@@ -803,6 +803,78 @@ if (rotateHint) {
 }
 
 // ------------------------------------------------------------
+// Fullscreen handling
+//   - Android / desktop: real Fullscreen API (hides browser UI) + lock landscape
+//   - iOS Safari: API unavailable, so guide the player to Add to Home Screen
+// ------------------------------------------------------------
+const fsBtn = document.getElementById('fsBtn');
+const fsTip = document.getElementById('fsTip');
+
+function isStandalone() {
+    return window.matchMedia('(display-mode: standalone)').matches ||
+           window.matchMedia('(display-mode: fullscreen)').matches ||
+           window.navigator.standalone === true;
+}
+
+function fsElement() {
+    return document.fullscreenElement || document.webkitFullscreenElement;
+}
+
+function requestFs() {
+    const el = document.documentElement;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (!req) return false;
+    try {
+        const p = req.call(el);
+        const lockLandscape = () => {
+            if (screen.orientation && screen.orientation.lock) {
+                screen.orientation.lock('landscape').catch(() => {});
+            }
+        };
+        if (p && p.then) p.then(lockLandscape).catch(() => {});
+        else lockLandscape();
+        return true;
+    } catch (err) {
+        return false;
+    }
+}
+
+function exitFs() {
+    const ex = document.exitFullscreen || document.webkitExitFullscreen;
+    if (ex) ex.call(document);
+}
+
+if (isStandalone()) {
+    // Already launched as a fullscreen app — no button needed.
+    if (fsBtn) fsBtn.classList.add('hidden');
+}
+
+if (fsBtn) {
+    fsBtn.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        if (fsElement()) {
+            exitFs();
+            return;
+        }
+        const ok = requestFs();
+        if (!ok) {
+            // iOS Safari: show the Add-to-Home-Screen tip instead.
+            fsTip.classList.toggle('show');
+        }
+    });
+}
+
+if (fsTip) {
+    fsTip.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        fsTip.classList.remove('show');
+    });
+}
+
+document.addEventListener('fullscreenchange', handleResize);
+document.addEventListener('webkitfullscreenchange', handleResize);
+
+// ------------------------------------------------------------
 // Boot
 // ------------------------------------------------------------
 function startGame() {

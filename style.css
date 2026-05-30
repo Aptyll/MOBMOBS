@@ -207,6 +207,57 @@ html, body {
 .pedal-brake { background: linear-gradient(180deg, #e74c3c, #b9362a); }
 .pedal.pressed { transform: scale(0.94); filter: brightness(1.25); }
 
+/* ---------- Fullscreen button ---------- */
+#fsBtn {
+    position: fixed;
+    top: max(12px, env(safe-area-inset-top));
+    right: max(14px, env(safe-area-inset-right));
+    z-index: 200;
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: rgba(8, 10, 14, 0.55);
+    color: #fff;
+    font-size: 22px;
+    line-height: 1;
+    pointer-events: all;
+    cursor: pointer;
+}
+
+#fsBtn.hidden { display: none; }
+
+/* ---------- Install / fullscreen tip ---------- */
+#fsTip {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 300;
+    max-width: 320px;
+    display: none;
+    padding: 16px 18px;
+    border-radius: 14px;
+    background: rgba(8, 10, 14, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.5;
+    text-align: center;
+    pointer-events: all;
+    cursor: pointer;
+}
+
+#fsTip.show { display: block; }
+
+#fsTip .tip-x {
+    display: block;
+    margin-top: 8px;
+    font-size: 12px;
+    color: #9ad0ff;
+}
+
 /* ---------- Rotate hint (small, non-blocking banner) ---------- */
 #rotateHint {
     position: fixed;
