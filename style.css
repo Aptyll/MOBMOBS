@@ -16,6 +16,7 @@ body {
     -webkit-touch-callout: none;
     -webkit-user-select: none;
     user-select: none;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
 #gameContainer {
@@ -32,12 +33,93 @@ body {
     max-height: 100vh;
 }
 
+/* ---------- HUD ---------- */
+#hud {
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    z-index: 100;
+    color: #fff;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.8);
+    pointer-events: none;
+}
+
+.hud-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.hud-label {
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: #9ad0ff;
+    min-width: 42px;
+}
+
+#lapValue, #timeValue, #bestValue {
+    font-size: 18px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.hud-speed {
+    margin-top: 10px;
+    align-items: baseline;
+}
+
+#speedValue {
+    font-size: 40px;
+    font-weight: 800;
+    color: #ffd166;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+}
+
+.hud-unit {
+    font-size: 12px;
+    letter-spacing: 2px;
+    color: #ffd166;
+}
+
+/* ---------- Center message ---------- */
+#centerMessage {
+    position: fixed;
+    top: 38%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 150;
+    color: #fff;
+    font-size: 72px;
+    font-weight: 900;
+    text-shadow: 0 4px 20px rgba(0, 0, 0, 0.9);
+    text-align: center;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+#centerMessage.show {
+    opacity: 1;
+}
+
+#centerMessage .sub {
+    display: block;
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    margin-top: 8px;
+    color: #9ad0ff;
+}
+
+/* ---------- Steering joystick ---------- */
 .joystick {
     position: fixed;
     bottom: 30px;
     left: 30px;
-    width: 120px;
-    height: 120px;
+    width: 130px;
+    height: 130px;
     pointer-events: none;
     z-index: 100;
 }
@@ -46,8 +128,8 @@ body {
     width: 100%;
     height: 100%;
     border-radius: 50%;
-    background: rgba(40, 40, 40, 0.6);
-    border: 2px solid rgba(80, 80, 80, 0.8);
+    background: rgba(40, 40, 40, 0.55);
+    border: 2px solid rgba(120, 120, 120, 0.8);
     position: absolute;
     top: 0;
     left: 0;
@@ -56,11 +138,11 @@ body {
 }
 
 .joystick-stick {
-    width: 60px;
-    height: 60px;
+    width: 62px;
+    height: 62px;
     border-radius: 50%;
-    background: rgba(100, 100, 100, 0.8);
-    border: 2px solid rgba(150, 150, 150, 0.9);
+    background: rgba(120, 160, 220, 0.85);
+    border: 2px solid rgba(180, 210, 255, 0.95);
     position: absolute;
     top: 50%;
     left: 50%;
@@ -71,4 +153,44 @@ body {
 
 .joystick.active .joystick-stick {
     transition: none;
+}
+
+/* ---------- Pedals ---------- */
+#pedals {
+    position: fixed;
+    bottom: 30px;
+    right: 30px;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.pedal {
+    width: 110px;
+    height: 70px;
+    border-radius: 16px;
+    border: 2px solid rgba(255, 255, 255, 0.25);
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    color: #fff;
+    pointer-events: all;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    transition: transform 0.05s ease, filter 0.05s ease;
+}
+
+.pedal-gas {
+    background: linear-gradient(180deg, #2ecc71, #1e9e57);
+}
+
+.pedal-brake {
+    background: linear-gradient(180deg, #e74c3c, #b9362a);
+}
+
+.pedal.pressed {
+    transform: scale(0.94);
+    filter: brightness(1.25);
 }
