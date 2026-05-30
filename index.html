@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -15,6 +15,10 @@
     <!-- Heads-up display -->
     <div id="hud">
         <div class="hud-row">
+            <span class="hud-label">POS</span>
+            <span id="posValue">1 / 4</span>
+        </div>
+        <div class="hud-row">
             <span class="hud-label">LAP</span>
             <span id="lapValue">1 / 3</span>
         </div>
@@ -26,13 +30,16 @@
             <span class="hud-label">BEST</span>
             <span id="bestValue">--:--.--</span>
         </div>
-        <div class="hud-row hud-speed">
-            <span id="speedValue">0</span>
-            <span class="hud-unit">KM/H</span>
-        </div>
     </div>
 
-    <!-- Center messages (countdown / finish) -->
+    <!-- Speedometer (bottom-center) -->
+    <div id="speedo">
+        <span id="speedValue">0</span>
+        <span class="hud-unit">KM/H</span>
+        <div id="boostBar"><div id="boostFill"></div></div>
+    </div>
+
+    <!-- Center messages (countdown / boost / finish) -->
     <div id="centerMessage"></div>
 
     <!-- Steering joystick (left) -->
@@ -45,6 +52,12 @@
     <div id="pedals">
         <button id="gasBtn" class="pedal pedal-gas">GAS</button>
         <button id="brakeBtn" class="pedal pedal-brake">BRAKE</button>
+    </div>
+
+    <!-- Rotate-to-landscape hint (portrait only) -->
+    <div id="rotateHint">
+        <div class="rotate-icon">↻</div>
+        <div>Rotate your device<br>to landscape</div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>

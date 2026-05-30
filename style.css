@@ -4,14 +4,11 @@
     box-sizing: border-box;
 }
 
-body {
-    width: 100vw;
-    height: 100vh;
+html, body {
+    width: 100%;
+    height: 100%;
     overflow: hidden;
     background: #0a0a0a;
-    display: flex;
-    justify-content: center;
-    align-items: center;
     touch-action: none;
     -webkit-touch-callout: none;
     -webkit-user-select: none;
@@ -19,25 +16,25 @@ body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
+/* Fullscreen canvas */
 #gameContainer {
+    position: fixed;
+    inset: 0;
     width: 100vw;
     height: 100vh;
-    display: flex;
-    justify-content: center;
-    align-items: center;
 }
 
 #gameContainer canvas {
     display: block;
-    max-width: 100vw;
-    max-height: 100vh;
+    width: 100vw !important;
+    height: 100vh !important;
 }
 
 /* ---------- HUD ---------- */
 #hud {
     position: fixed;
-    top: 16px;
-    left: 16px;
+    top: max(14px, env(safe-area-inset-top));
+    left: max(16px, env(safe-area-inset-left));
     z-index: 100;
     color: #fff;
     text-shadow: 0 2px 6px rgba(0, 0, 0, 0.8);
@@ -48,29 +45,42 @@ body {
     display: flex;
     align-items: baseline;
     gap: 8px;
-    margin-bottom: 4px;
+    margin-bottom: 3px;
 }
 
 .hud-label {
     font-size: 11px;
     letter-spacing: 2px;
     color: #9ad0ff;
-    min-width: 42px;
+    min-width: 40px;
 }
 
-#lapValue, #timeValue, #bestValue {
-    font-size: 18px;
+#posValue, #lapValue, #timeValue, #bestValue {
+    font-size: 17px;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
 }
 
-.hud-speed {
-    margin-top: 10px;
-    align-items: baseline;
+#posValue {
+    font-size: 22px;
+    color: #ffd166;
+}
+
+/* ---------- Speedometer ---------- */
+#speedo {
+    position: fixed;
+    bottom: max(18px, env(safe-area-inset-bottom));
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 100;
+    color: #fff;
+    text-align: center;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.8);
+    pointer-events: none;
 }
 
 #speedValue {
-    font-size: 40px;
+    font-size: 44px;
     font-weight: 800;
     color: #ffd166;
     font-variant-numeric: tabular-nums;
@@ -81,43 +91,58 @@ body {
     font-size: 12px;
     letter-spacing: 2px;
     color: #ffd166;
+    margin-left: 4px;
+}
+
+#boostBar {
+    width: 120px;
+    height: 7px;
+    margin: 6px auto 0;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.2);
+    overflow: hidden;
+}
+
+#boostFill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #00e5ff, #18ffb0);
+    transition: width 0.08s linear;
 }
 
 /* ---------- Center message ---------- */
 #centerMessage {
     position: fixed;
-    top: 38%;
+    top: 40%;
     left: 50%;
     transform: translate(-50%, -50%);
     z-index: 150;
     color: #fff;
-    font-size: 72px;
+    font-size: 64px;
     font-weight: 900;
     text-shadow: 0 4px 20px rgba(0, 0, 0, 0.9);
     text-align: center;
     pointer-events: none;
     opacity: 0;
-    transition: opacity 0.2s ease, transform 0.2s ease;
+    transition: opacity 0.2s ease;
 }
 
-#centerMessage.show {
-    opacity: 1;
-}
+#centerMessage.show { opacity: 1; }
 
 #centerMessage .sub {
     display: block;
-    font-size: 22px;
+    font-size: 20px;
     font-weight: 600;
-    letter-spacing: 2px;
-    margin-top: 8px;
+    letter-spacing: 1px;
+    margin-top: 10px;
     color: #9ad0ff;
 }
 
 /* ---------- Steering joystick ---------- */
 .joystick {
     position: fixed;
-    bottom: 30px;
-    left: 30px;
+    bottom: max(26px, env(safe-area-inset-bottom));
+    left: max(26px, env(safe-area-inset-left));
     width: 130px;
     height: 130px;
     pointer-events: none;
@@ -128,13 +153,11 @@ body {
     width: 100%;
     height: 100%;
     border-radius: 50%;
-    background: rgba(40, 40, 40, 0.55);
-    border: 2px solid rgba(120, 120, 120, 0.8);
+    background: rgba(40, 40, 40, 0.5);
+    border: 2px solid rgba(120, 120, 120, 0.75);
     position: absolute;
-    top: 0;
-    left: 0;
+    inset: 0;
     pointer-events: all;
-    cursor: pointer;
 }
 
 .joystick-stick {
@@ -151,24 +174,22 @@ body {
     pointer-events: none;
 }
 
-.joystick.active .joystick-stick {
-    transition: none;
-}
+.joystick.active .joystick-stick { transition: none; }
 
 /* ---------- Pedals ---------- */
 #pedals {
     position: fixed;
-    bottom: 30px;
-    right: 30px;
+    bottom: max(26px, env(safe-area-inset-bottom));
+    right: max(26px, env(safe-area-inset-right));
     z-index: 100;
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 12px;
 }
 
 .pedal {
-    width: 110px;
-    height: 70px;
+    width: 120px;
+    height: 66px;
     border-radius: 16px;
     border: 2px solid rgba(255, 255, 255, 0.25);
     font-size: 18px;
@@ -182,15 +203,39 @@ body {
     transition: transform 0.05s ease, filter 0.05s ease;
 }
 
-.pedal-gas {
-    background: linear-gradient(180deg, #2ecc71, #1e9e57);
+.pedal-gas { background: linear-gradient(180deg, #2ecc71, #1e9e57); }
+.pedal-brake { background: linear-gradient(180deg, #e74c3c, #b9362a); }
+.pedal.pressed { transform: scale(0.94); filter: brightness(1.25); }
+
+/* ---------- Rotate hint ---------- */
+#rotateHint {
+    position: fixed;
+    inset: 0;
+    z-index: 500;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    background: rgba(8, 10, 14, 0.96);
+    color: #fff;
+    font-size: 22px;
+    font-weight: 700;
+    text-align: center;
+    line-height: 1.4;
 }
 
-.pedal-brake {
-    background: linear-gradient(180deg, #e74c3c, #b9362a);
+.rotate-icon {
+    font-size: 64px;
+    animation: spin 2.5s linear infinite;
 }
 
-.pedal.pressed {
-    transform: scale(0.94);
-    filter: brightness(1.25);
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* Show the hint only on touch devices held in portrait */
+@media (orientation: portrait) and (pointer: coarse) {
+    #rotateHint { display: flex; }
 }
