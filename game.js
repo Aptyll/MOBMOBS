@@ -171,9 +171,30 @@ function initRenderer() {
     renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 }
 
+// Free all GPU resources (geometries, materials, textures) held by the
+// previous scene before we drop it. Three.js does NOT do this automatically
+// when a Scene is garbage-collected, so without it every track (re)load
+// leaks the whole world's buffers and the game gets laggier over time.
+function disposeScene() {
+    if (!scene) return;
+    scene.traverse((obj) => {
+        if (obj.geometry) obj.geometry.dispose();
+        const mat = obj.material;
+        if (mat) {
+            const mats = Array.isArray(mat) ? mat : [mat];
+            mats.forEach((m) => {
+                if (m.map) m.map.dispose();
+                m.dispose();
+            });
+        }
+    });
+    scene.clear();
+}
+
 function buildScene() {
     const theme = currentTrack.theme;
 
+    disposeScene();
     scene = new THREE.Scene();
     scene.background = new THREE.Color(theme.sky);
     scene.fog = new THREE.Fog(theme.fog, theme.fogNear, theme.fogFar);
@@ -184,7 +205,7 @@ function buildScene() {
     const sun = new THREE.DirectionalLight(0xffffff, theme.dark ? 0.7 : 0.95);
     sun.position.set(80, 140, 60);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.mapSize.set(1024, 1024);
     const d = 160;
     sun.shadow.camera.left = -d;
     sun.shadow.camera.right = d;
@@ -485,7 +506,6 @@ function makeTree(x, z, scale, baseY, opts) {
     const trunkMat = new THREE.MeshLambertMaterial({ color: 0x7a5230, flatShading: true });
     const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.55, 2.2, 5), trunkMat);
     trunk.position.y = 1.1;
-    trunk.castShadow = true;
     g.add(trunk);
 
     // Forest is darker/lusher; default greens are brighter.
@@ -500,7 +520,6 @@ function makeTree(x, z, scale, baseY, opts) {
         for (let i = 0; i < 3; i++) {
             const cone = new THREE.Mesh(new THREE.ConeGeometry(2.0 - i * 0.45, 2.0, 6), leafMat);
             cone.position.y = 2.6 + i * 1.3;
-            cone.castShadow = true;
             g.add(cone);
             if (opts.snow) {
                 // snow cap on each tier
@@ -509,15 +528,14 @@ function makeTree(x, z, scale, baseY, opts) {
                     new THREE.MeshLambertMaterial({ color: 0xf5f9ff, flatShading: true })
                 );
                 cap.position.y = 3.4 + i * 1.3;
-                cap.castShadow = true;
                 g.add(cap);
             }
         }
     } else {
         const blob = new THREE.Mesh(new THREE.IcosahedronGeometry(2.1, 0), leafMat);
-        blob.position.y = 3.4; blob.castShadow = true; g.add(blob);
+        blob.position.y = 3.4; g.add(blob);
         const blob2 = new THREE.Mesh(new THREE.IcosahedronGeometry(1.5, 0), leafMat);
-        blob2.position.set(1.0, 2.7, 0.5); blob2.castShadow = true; g.add(blob2);
+        blob2.position.set(1.0, 2.7, 0.5); g.add(blob2);
     }
 
     g.position.set(x, baseY, z);
@@ -534,7 +552,6 @@ function makeBush(x, z, scale, baseY, opts) {
     const bush = new THREE.Mesh(new THREE.IcosahedronGeometry(1.2, 0), mat);
     bush.position.set(x, baseY + 0.7 * scale, z);
     bush.scale.setScalar(scale);
-    bush.castShadow = true;
     scene.add(bush);
 }
 
