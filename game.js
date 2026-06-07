@@ -86,7 +86,7 @@ const hud = {
 };
 
 // Patch / build number shown top-left. Bump this with each gameplay update.
-const VERSION = 'v1.6.0';
+const VERSION = 'v1.7.0';
 if (hud.build) hud.build.textContent = VERSION;
 
 // Live FPS, averaged over a short window so the readout is steady.
@@ -1304,8 +1304,9 @@ function finishRace() {
     race.finished = true;
     const place = player.finishOrder || playerPosition();
     const ord = ['', '1st', '2nd', '3rd', '4th', '5th', '6th'][place] || (place + 'th');
+    const nextName = TRACKS[(currentTrackIndex + 1) % TRACKS.length].name;
     showCenter(
-        `FINISH ${ord}<span class="sub">Time ${formatTime(player.finishTime || race.elapsed)} &middot; Best lap ${formatTime(player.bestLap)}</span><span class="sub" style="color:#ffd166">Tap to race again &middot; ≡ for tracks</span>`,
+        `FINISH ${ord}<span class="sub">Time ${formatTime(player.finishTime || race.elapsed)} &middot; Best lap ${formatTime(player.bestLap)}</span><span class="sub" style="color:#ffd166">Tap for next track: ${nextName} &middot; ≡ for tracks</span>`,
         true
     );
     waitForRestart();
@@ -1333,12 +1334,9 @@ function clearRestartListeners() {
 }
 
 function resetRace() {
-    race.started = false;
-    race.finished = false;
-    race.elapsed = 0;
-    placeRacersAtStart();
-    hideCenter();
-    startCountdown();
+    // Rotate to the next track so back-to-back games aren't the same map.
+    const next = (currentTrackIndex + 1) % TRACKS.length;
+    startTrack(next);
 }
 
 // ------------------------------------------------------------
