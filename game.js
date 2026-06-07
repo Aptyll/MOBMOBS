@@ -86,7 +86,7 @@ const hud = {
 };
 
 // Patch / build number shown top-left. Bump this with each gameplay update.
-const VERSION = 'v1.8.0';
+const VERSION = 'v1.9.0';
 if (hud.build) hud.build.textContent = VERSION;
 
 // Live FPS, averaged over a short window so the readout is steady.
@@ -688,21 +688,43 @@ function buildMountains() {
 // ------------------------------------------------------------
 const WHEEL_RADIUS = 0.72;
 
-// A detailed wheel: chunky tire, metallic rim, hub cap and a 6-spoke star.
+// Finish presets map to MeshPhong specular/shininess.
+const FINISHES = {
+    matte:    { shininess: 6,   specular: 0x141414 },
+    gloss:    { shininess: 100, specular: 0x444444 },
+    metallic: { shininess: 240, specular: 0xa8adb6 }
+};
+function bodyMaterial(color, finish) {
+    const f = FINISHES[finish] || FINISHES.gloss;
+    return new THREE.MeshPhongMaterial({ color, shininess: f.shininess, specular: f.specular });
+}
+
+// A detailed wheel: chunky tire, coloured rim, hub cap and a 6-spoke star.
 // Returned group spins about its local X axis (the axle) to roll.
-function createWheel() {
+// `simple` builds a 2-mesh wheel for AI cars (fewer draw calls).
+function createWheel(rimColor, simple) {
     const wheel = new THREE.Group();
     const R = WHEEL_RADIUS, W = 0.56;
+    const rc = rimColor != null ? rimColor : 0xc4c9d1;
 
     const tire = new THREE.Mesh(
-        new THREE.CylinderGeometry(R, R, W, 22),
+        new THREE.CylinderGeometry(R, R, W, simple ? 12 : 22),
         new THREE.MeshPhongMaterial({ color: 0x141619, shininess: 22 })
     );
     tire.rotation.z = Math.PI / 2;
     tire.castShadow = true;
     wheel.add(tire);
 
-    // tread ring (slightly proud, darker) for a bit of sidewall depth
+    const rim = new THREE.Mesh(
+        new THREE.CylinderGeometry(R * 0.6, R * 0.6, W + 0.05, simple ? 10 : 18),
+        new THREE.MeshPhongMaterial({ color: rc, shininess: 150 })
+    );
+    rim.rotation.z = Math.PI / 2;
+    wheel.add(rim);
+
+    if (simple) return wheel;
+
+    // tread ring for sidewall depth
     const tread = new THREE.Mesh(
         new THREE.CylinderGeometry(R * 1.01, R * 1.01, W * 0.6, 22),
         new THREE.MeshPhongMaterial({ color: 0x0c0d0f, shininess: 10 })
@@ -710,21 +732,14 @@ function createWheel() {
     tread.rotation.z = Math.PI / 2;
     wheel.add(tread);
 
-    const rim = new THREE.Mesh(
-        new THREE.CylinderGeometry(R * 0.6, R * 0.6, W + 0.05, 18),
-        new THREE.MeshPhongMaterial({ color: 0xc4c9d1, shininess: 150 })
-    );
-    rim.rotation.z = Math.PI / 2;
-    wheel.add(rim);
-
     const hub = new THREE.Mesh(
         new THREE.CylinderGeometry(R * 0.18, R * 0.18, W + 0.1, 12),
-        new THREE.MeshPhongMaterial({ color: 0x33373e, shininess: 90 })
+        new THREE.MeshPhongMaterial({ color: 0x2a2d33, shininess: 90 })
     );
     hub.rotation.z = Math.PI / 2;
     wheel.add(hub);
 
-    const spokeMat = new THREE.MeshPhongMaterial({ color: 0xd9dce1, shininess: 120 });
+    const spokeMat = new THREE.MeshPhongMaterial({ color: rc, shininess: 150 });
     for (let s = 0; s < 3; s++) {
         const spoke = new THREE.Mesh(new THREE.BoxGeometry(W + 0.06, 0.1, R * 1.65), spokeMat);
         spoke.rotation.x = (s / 3) * Math.PI; // 3 bars => 6-spoke look
@@ -733,32 +748,65 @@ function createWheel() {
     return wheel;
 }
 
-function createCarMesh(color, reactorColor) {
+// Build a customisable car. opts: { bodyColor, reactorColor, rimColor, finish,
+// simple }. Does NOT add itself to a scene — the caller places it.
+function createCarMesh(opts) {
+    opts = opts || {};
+    const bodyColor = opts.bodyColor != null ? opts.bodyColor : 0xe53935;
+    const reactorColor = opts.reactorColor != null ? opts.reactorColor : 0x00e5ff;
+    const rimColor = opts.rimColor != null ? opts.rimColor : 0xc4c9d1;
+    const finish = opts.finish || 'gloss';
+    const simple = !!opts.simple;
+
     const g = new THREE.Group();
-    const bodyMat = new THREE.MeshPhongMaterial({ color, shininess: 90 });
+    const bodyMat = bodyMaterial(bodyColor, finish);
+    const trimMat = new THREE.MeshPhongMaterial({ color: 0x1a1d22, shininess: 60 });
 
-    // Main body + a lower nose wedge for a sleeker silhouette.
-    const body = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.7, 4.2), bodyMat);
-    body.position.y = 0.85; body.castShadow = true; g.add(body);
+    // Main body: a chassis slab + a sloped upper cowl for a sleeker profile.
+    const chassis = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.5, 4.2), bodyMat);
+    chassis.position.y = 0.72; chassis.castShadow = true; g.add(chassis);
 
-    const nose = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.4, 1.2), bodyMat);
-    nose.position.set(0, 0.62, 1.75); nose.castShadow = true; g.add(nose);
+    const cowl = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.42, 2.4), bodyMat);
+    cowl.position.set(0, 1.08, -0.2); cowl.castShadow = true; g.add(cowl);
 
-    // Canopy/cabin.
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.34, 1.3), bodyMat);
+    nose.position.set(0, 0.66, 1.8); nose.castShadow = true; g.add(nose);
+
+    // Glass canopy (tinted, slightly see-through).
     const cabin = new THREE.Mesh(
-        new THREE.BoxGeometry(1.45, 0.55, 1.7),
-        new THREE.MeshPhongMaterial({ color: 0x171f25, shininess: 150 })
+        new THREE.BoxGeometry(1.35, 0.5, 1.6),
+        new THREE.MeshPhongMaterial({ color: 0x0e151b, shininess: 180, specular: 0x9fd8ff,
+            transparent: true, opacity: 0.82 })
     );
     cabin.position.set(0, 1.42, 0.15); cabin.castShadow = true; g.add(cabin);
 
+    if (!simple) {
+        // Side skirts.
+        [-1, 1].forEach(sx => {
+            const skirt = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.28, 3.4), trimMat);
+            skirt.position.set(sx * 1.02, 0.5, -0.1); g.add(skirt);
+        });
+        // Front splitter.
+        const splitter = new THREE.Mesh(new THREE.BoxGeometry(2.05, 0.1, 0.5), trimMat);
+        splitter.position.set(0, 0.48, 2.35); g.add(splitter);
+        // Headlights (front) and taillights (rear) as emissive strips.
+        [-0.6, 0.6].forEach(sx => {
+            const head = new THREE.Mesh(
+                new THREE.BoxGeometry(0.42, 0.16, 0.1),
+                new THREE.MeshBasicMaterial({ color: 0xfff4d6 })
+            );
+            head.position.set(sx, 0.74, 2.42); g.add(head);
+            const tail = new THREE.Mesh(
+                new THREE.BoxGeometry(0.5, 0.18, 0.1),
+                new THREE.MeshBasicMaterial({ color: 0xff2a2a })
+            );
+            tail.position.set(sx, 0.92, -2.12); g.add(tail);
+        });
+    }
+
     // ---- Boost reactor (rear deck, faces the chase camera) ----
-    // A dark housing with a strip of emissive segments that light up to show
-    // how much nitro is charged, and surge when a boost is firing.
-    const deck = new THREE.Mesh(
-        new THREE.BoxGeometry(0.84, 0.16, 1.75),
-        new THREE.MeshPhongMaterial({ color: 0x0c0f12, shininess: 60 })
-    );
-    deck.position.set(0, 1.2, -1.05); g.add(deck);
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(0.84, 0.16, 1.75), trimMat);
+    deck.position.set(0, 1.28, -1.05); g.add(deck);
 
     const boostSegs = [];
     const SEG = 6;
@@ -767,20 +815,17 @@ function createCarMesh(color, reactorColor) {
             new THREE.BoxGeometry(0.54, 0.15, 0.2),
             new THREE.MeshBasicMaterial({ color: 0x07242a })
         );
-        seg.position.set(0, 1.3, -0.4 - i * 0.25); // front segment fills first
+        seg.position.set(0, 1.38, -0.4 - i * 0.25); // front segment fills first
         g.add(seg);
         boostSegs.push(seg);
     }
 
     // Rear wing on struts.
     const wing = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.12, 0.55), bodyMat);
-    wing.position.set(0, 1.52, -2.05); g.add(wing);
+    wing.position.set(0, 1.6, -2.05); wing.castShadow = true; g.add(wing);
     [-0.85, 0.85].forEach(sx => {
-        const strut = new THREE.Mesh(
-            new THREE.BoxGeometry(0.12, 0.42, 0.12),
-            new THREE.MeshPhongMaterial({ color: 0x202327 })
-        );
-        strut.position.set(sx, 1.32, -2.0); g.add(strut);
+        const strut = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.42, 0.12), trimMat);
+        strut.position.set(sx, 1.4, -2.0); g.add(strut);
     });
 
     // ---- Wheels (steerable fronts, all roll) ----
@@ -793,7 +838,7 @@ function createCarMesh(color, reactorColor) {
     ].forEach(d => {
         const pivot = new THREE.Group();          // front pivot steers
         pivot.position.set(d.x, WHEEL_RADIUS, d.z);
-        const spinner = createWheel();            // spins to roll
+        const spinner = createWheel(rimColor, simple); // spins to roll
         pivot.add(spinner);
         g.add(pivot);
         wheels.push({ pivot, spinner, front: d.front });
@@ -802,14 +847,21 @@ function createCarMesh(color, reactorColor) {
     g._bodyMat = bodyMat;
     g._boostSegs = boostSegs;
     g._wheels = wheels;
-    g._reactorRGB = hexToRGB01(reactorColor != null ? reactorColor : 0x00e5ff);
-    scene.add(g);
+    g._reactorRGB = hexToRGB01(reactorColor);
     return g;
 }
 
 function makeRacer(opts) {
+    const mesh = createCarMesh({
+        bodyColor: opts.color,
+        reactorColor: opts.reactorColor,
+        rimColor: opts.rimColor,
+        finish: opts.finish,
+        simple: opts.simple
+    });
+    scene.add(mesh);
     return {
-        mesh: createCarMesh(opts.color, opts.reactorColor),
+        mesh,
         baseColor: opts.color,
         isPlayer: !!opts.isPlayer,
         x: 0, z: 0, y: 0, heading: 0, speed: 0,
@@ -835,13 +887,17 @@ function makeRacer(opts) {
 
 function buildRacers() {
     racers = [];
-    player = makeRacer({ color: profile.bodyColor, reactorColor: profile.reactorColor, isPlayer: true });
+    player = makeRacer({
+        color: profile.bodyColor, reactorColor: profile.reactorColor,
+        rimColor: profile.rimColor, finish: profile.finish, isPlayer: true
+    });
     racers.push(player);
 
     const aiCount = 3;
     for (let i = 0; i < aiCount; i++) {
         racers.push(makeRacer({
             color: AI_COLORS[i % AI_COLORS.length],
+            simple: true,                 // AI cars: lighter LOD (fewer draw calls)
             skill: 0.9 + Math.random() * 0.16,
             lookahead: 14 + Math.floor(Math.random() * 6)
         }));
@@ -1418,13 +1474,20 @@ if (menuBtn) {
 const PROFILE_KEY = 'mobmobs_profile';
 const DEFAULT_PROFILE = {
     name: 'Player', bodyColor: 0xe53935, reactorColor: 0x00e5ff,
+    rimColor: 0xc4c9d1, finish: 'gloss',
     races: 0, wins: 0, bestLap: null
 };
 const BODY_COLORS = [
-    0xe53935, 0x1e88e5, 0x43a047, 0xfdd835, 0xff8f00,
-    0x8e24aa, 0x00acc1, 0xec407a, 0xeceff1, 0x263238
+    0xe53935, 0xff8f00, 0xfdd835, 0x43a047, 0x00acc1, 0x1e88e5,
+    0x3949ab, 0x8e24aa, 0xec407a, 0xff7043, 0xeceff1, 0x263238
 ];
-const REACTOR_COLORS = [0x00e5ff, 0x76ff03, 0xff3d00, 0xffea00, 0xd500f9, 0xffffff];
+const REACTOR_COLORS = [0x00e5ff, 0x76ff03, 0xff3d00, 0xffea00, 0xd500f9, 0xff1493, 0xffffff, 0xff9100];
+const RIM_COLORS = [0xc4c9d1, 0x2a2d33, 0xffd54f, 0xff5252, 0x40c4ff, 0x69f0ae, 0xb388ff, 0xff80ab];
+const FINISH_OPTS = [
+    { id: 'gloss', label: 'Gloss' },
+    { id: 'matte', label: 'Matte' },
+    { id: 'metallic', label: 'Metal' }
+];
 
 let profile = loadProfile();
 
@@ -1459,12 +1522,14 @@ const profileAvatar = document.getElementById('profileAvatar');
 const statRaces = document.getElementById('statRaces');
 const statWins = document.getElementById('statWins');
 const statBest = document.getElementById('statBest');
-const cpBody = document.getElementById('cpBody');
-const cpReactor = document.getElementById('cpReactor');
+const garageCanvas = document.getElementById('garageCanvas');
 const bodySwatches = document.getElementById('bodySwatches');
+const rimSwatches = document.getElementById('rimSwatches');
 const reactorSwatches = document.getElementById('reactorSwatches');
+const finishControl = document.getElementById('finishControl');
 
 function hideAllScreens() {
+    stopGaragePreview();
     if (homeEl) homeEl.classList.remove('show');
     if (garageEl) garageEl.classList.remove('show');
     if (menuEl) menuEl.classList.remove('show');
@@ -1488,10 +1553,89 @@ function showHome() {
     homeEl.classList.add('show');
 }
 
-function updateCarPreview() {
-    cpBody.style.background = hexToCss(profile.bodyColor);
-    cpReactor.style.background = hexToCss(profile.reactorColor);
-    cpReactor.style.boxShadow = `0 0 12px ${hexToCss(profile.reactorColor)}`;
+// ---- Live 3D garage preview (its own tiny renderer/scene) ----
+const garagePreview = {
+    renderer: null, scene: null, camera: null,
+    car: null, raf: 0, angle: 0.6, dragging: false, lastX: 0, spin: 0.012
+};
+
+function initGaragePreview() {
+    const gp = garagePreview;
+    if (gp.renderer || !garageCanvas) return;
+    gp.renderer = new THREE.WebGLRenderer({ canvas: garageCanvas, antialias: true, alpha: true });
+    gp.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+    gp.scene = new THREE.Scene();
+    gp.camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
+    gp.camera.position.set(0, 3.0, 8.6);
+    gp.camera.lookAt(0, 0.85, 0);
+
+    gp.scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+    const key = new THREE.DirectionalLight(0xffffff, 1.05);
+    key.position.set(5, 9, 6); gp.scene.add(key);
+    const fill = new THREE.DirectionalLight(0x88bbff, 0.5);
+    fill.position.set(-6, 4, -5); gp.scene.add(fill);
+
+    // Drag to spin the car.
+    garageCanvas.addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+        gp.dragging = true; gp.lastX = e.clientX;
+    });
+    window.addEventListener('pointermove', (e) => {
+        if (!gp.dragging) return;
+        gp.angle += (e.clientX - gp.lastX) * 0.01;
+        gp.lastX = e.clientX;
+    });
+    window.addEventListener('pointerup', () => { gp.dragging = false; });
+}
+
+function sizeGaragePreview() {
+    const gp = garagePreview;
+    if (!gp.renderer) return;
+    const w = garageCanvas.clientWidth || 320;
+    const h = garageCanvas.clientHeight || 200;
+    gp.renderer.setSize(w, h, false);
+    gp.camera.aspect = w / h;
+    gp.camera.updateProjectionMatrix();
+}
+
+function refreshGarageCar() {
+    const gp = garagePreview;
+    if (!gp.scene) return;
+    if (gp.car) {
+        gp.scene.remove(gp.car);
+        gp.car.traverse(o => {
+            if (o.geometry) o.geometry.dispose();
+            if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose());
+        });
+    }
+    gp.car = createCarMesh({
+        bodyColor: profile.bodyColor, reactorColor: profile.reactorColor,
+        rimColor: profile.rimColor, finish: profile.finish
+    });
+    // Fully light the reactor strip so the chosen colour reads in the preview.
+    const rc = gp.car._reactorRGB;
+    gp.car._boostSegs.forEach(s => s.material.color.setRGB(rc[0], rc[1], rc[2]));
+    gp.scene.add(gp.car);
+}
+
+function garageLoop() {
+    const gp = garagePreview;
+    gp.raf = requestAnimationFrame(garageLoop);
+    if (!gp.dragging) gp.angle += gp.spin;
+    if (gp.car) gp.car.rotation.y = gp.angle;
+    gp.renderer.render(gp.scene, gp.camera);
+}
+
+function startGaragePreview() {
+    initGaragePreview();
+    sizeGaragePreview();
+    refreshGarageCar();
+    if (!garagePreview.raf) garageLoop();
+}
+
+function stopGaragePreview() {
+    if (garagePreview.raf) { cancelAnimationFrame(garagePreview.raf); garagePreview.raf = 0; }
 }
 
 function buildSwatches(container, colors, key) {
@@ -1506,19 +1650,39 @@ function buildSwatches(container, colors, key) {
             profile[key] = c;
             saveProfile();
             buildSwatches(container, colors, key); // refresh selection ring
-            updateCarPreview();
+            refreshGarageCar();
         });
         container.appendChild(b);
     });
 }
 
+function buildFinishControl() {
+    finishControl.innerHTML = '';
+    FINISH_OPTS.forEach(opt => {
+        const b = document.createElement('button');
+        b.className = 'seg-btn' + (opt.id === profile.finish ? ' selected' : '');
+        b.textContent = opt.label;
+        b.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            profile.finish = opt.id;
+            saveProfile();
+            buildFinishControl();
+            refreshGarageCar();
+        });
+        finishControl.appendChild(b);
+    });
+}
+
 function showGarage() {
     hideCenter();
-    updateCarPreview();
     buildSwatches(bodySwatches, BODY_COLORS, 'bodyColor');
+    buildSwatches(rimSwatches, RIM_COLORS, 'rimColor');
     buildSwatches(reactorSwatches, REACTOR_COLORS, 'reactorColor');
+    buildFinishControl();
     hideAllScreens();
     garageEl.classList.add('show');
+    startGaragePreview();
 }
 
 if (nameInput) {
@@ -1541,6 +1705,7 @@ if (nameInput) {
 // Resize / fullscreen
 // ------------------------------------------------------------
 function handleResize() {
+    if (garageEl && garageEl.classList.contains('show')) sizeGaragePreview();
     if (!renderer || !camera) return;
     const w = window.innerWidth, h = window.innerHeight;
     renderer.setSize(w, h);

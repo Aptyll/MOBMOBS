@@ -104,23 +104,27 @@
 
     <!-- Garage / car customization -->
     <div id="garage" class="menu">
-        <div class="menu-panel">
-            <h1 class="title-sm">GARAGE</h1>
+        <div class="menu-panel garage-panel">
+            <h1 class="title-sm garage-title">GARAGE</h1>
 
-            <div class="car-preview" id="carPreview">
-                <div class="cp-wing"></div>
-                <div class="cp-reactor" id="cpReactor"></div>
-                <div class="cp-cabin"></div>
-                <div class="cp-body" id="cpBody"></div>
-                <div class="cp-wheel cp-wheel-l"></div>
-                <div class="cp-wheel cp-wheel-r"></div>
+            <div class="garage-preview">
+                <canvas id="garageCanvas"></canvas>
+                <span class="garage-hint">drag to spin</span>
             </div>
 
-            <p class="garage-label">Body colour</p>
-            <div class="swatch-grid" id="bodySwatches"></div>
+            <div class="garage-opts">
+                <p class="garage-label">Body</p>
+                <div class="swatch-grid" id="bodySwatches"></div>
 
-            <p class="garage-label">Reactor colour</p>
-            <div class="swatch-grid" id="reactorSwatches"></div>
+                <p class="garage-label">Rims</p>
+                <div class="swatch-grid" id="rimSwatches"></div>
+
+                <p class="garage-label">Reactor</p>
+                <div class="swatch-grid" id="reactorSwatches"></div>
+
+                <p class="garage-label">Finish</p>
+                <div class="seg-control" id="finishControl"></div>
+            </div>
 
             <button class="btn-primary" id="garageBackBtn">DONE</button>
         </div>
