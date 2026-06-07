@@ -86,7 +86,7 @@ const hud = {
 };
 
 // Patch / build number shown top-left. Bump this with each gameplay update.
-const VERSION = 'v1.4.0';
+const VERSION = 'v1.5.0';
 if (hud.build) hud.build.textContent = VERSION;
 
 // Live FPS, averaged over a short window so the readout is steady.
@@ -145,8 +145,8 @@ const TRACKS = [
         name: 'Snowy Peaks',
         desc: 'Steep alpine climbs and big drops',
         points: ring([122, 96, 118, 92, 112, 98, 120, 90, 116, 100, 110, 104]),
-        // Big rolling elevation: tall peaks, deep dips. Periodic.
-        elev: (t) => 12 + 8 * Math.sin(t * TWO_PI * 2) + 5 * Math.sin(t * TWO_PI * 3 + 1.1),
+        // Rolling alpine elevation: gentle peaks and dips. Periodic.
+        elev: (t) => 7 + 4 * Math.sin(t * TWO_PI * 2) + 2 * Math.sin(t * TWO_PI * 3 + 1.1),
         boosts: [0.12, 0.34, 0.58, 0.8],
         ramps: [0.22, 0.66],
         theme: {
@@ -550,10 +550,25 @@ function rampUnder(r, hspeed) {
     return result;
 }
 
-// Road-surface height directly under a racer (uses last known sample).
+// Road-surface height under a racer. Linearly interpolates between the two
+// nearest centreline samples (matching the road mesh, which is also linear
+// between samples) so the car glides over elevation instead of stair-stepping
+// from one of the 700 discrete sample heights to the next.
 function trackHeightAt(r) {
-    const p = centerPoints[r.lastIndex];
-    return p ? p.y : 0;
+    const i = r.lastIndex;
+    const a = centerPoints[i];
+    if (!a) return 0;
+    const t = tangents[i];
+    // Signed distance of the car ahead of / behind sample i along the track.
+    const along = (r.x - a.x) * t.x + (r.z - a.z) * t.z;
+    if (along >= 0) {
+        const b = centerPoints[(i + 1) % SAMPLES];
+        const segLen = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+        return a.y + (b.y - a.y) * clamp(along / segLen, 0, 1);
+    }
+    const p = centerPoints[(i - 1 + SAMPLES) % SAMPLES];
+    const segLen = Math.hypot(a.x - p.x, a.z - p.z) || 1;
+    return a.y + (p.y - a.y) * clamp(-along / segLen, 0, 1);
 }
 
 // ------------------------------------------------------------
@@ -880,22 +895,31 @@ function stepRacer(r, ctrl) {
     // Integrate horizontal position.
     r.x += r.vx; r.z += r.vz;
 
-    // Vertical: ramps lift the car; otherwise follow the road / airtime.
+    // Vertical: ramps launch a jump; otherwise the car hugs the road surface.
+    // Crucially, a downhill stretch does NOT make the car "fall" — only a ramp
+    // does. That keeps the engine/steering live over hills (they're gated on
+    // !airborne) and stops the per-frame airborne flicker on slopes.
     const hspeed = Math.hypot(r.vx, r.vz);
     const groundY = trackHeightAt(r);
     const ramp = rampUnder(r, hspeed);
     if (ramp) {
         r.y = ramp.y;
-        r.vy = ramp.vy;     // carried off the lip into a jump
+        r.vy = ramp.vy;     // ride the ramp; stored for launch off the lip
         r.airborne = false;
-    } else {
+    } else if (r.airborne) {
+        // mid-jump: integrate and fall until we meet the ground again
         r.y += r.vy;
-        if (r.y > groundY + 0.01) {
-            r.vy -= GRAVITY;
-            r.airborne = true;
-        } else {
-            r.y = groundY; r.vy = 0; r.airborne = false;
-        }
+        r.vy -= GRAVITY;
+        if (r.y <= groundY) { r.y = groundY; r.vy = 0; r.airborne = false; }
+    } else if (r.vy > 0.01) {
+        // just left a ramp lip with upward speed -> become airborne
+        r.airborne = true;
+        r.y += r.vy;
+        r.vy -= GRAVITY;
+    } else {
+        // grounded: follow the (interpolated) terrain height smoothly
+        r.y = groundY;
+        r.vy = 0;
     }
 
     r.speed = fwd; // forward speed, used by HUD + AI
