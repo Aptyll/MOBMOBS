@@ -86,7 +86,7 @@ const hud = {
 };
 
 // Patch / build number shown top-left. Bump this with each gameplay update.
-const VERSION = 'v1.5.0';
+const VERSION = 'v1.6.0';
 if (hud.build) hud.build.textContent = VERSION;
 
 // Live FPS, averaged over a short window so the readout is steady.
@@ -686,32 +686,122 @@ function buildMountains() {
 // ------------------------------------------------------------
 // Racers
 // ------------------------------------------------------------
+const WHEEL_RADIUS = 0.72;
+
+// A detailed wheel: chunky tire, metallic rim, hub cap and a 6-spoke star.
+// Returned group spins about its local X axis (the axle) to roll.
+function createWheel() {
+    const wheel = new THREE.Group();
+    const R = WHEEL_RADIUS, W = 0.56;
+
+    const tire = new THREE.Mesh(
+        new THREE.CylinderGeometry(R, R, W, 22),
+        new THREE.MeshPhongMaterial({ color: 0x141619, shininess: 22 })
+    );
+    tire.rotation.z = Math.PI / 2;
+    tire.castShadow = true;
+    wheel.add(tire);
+
+    // tread ring (slightly proud, darker) for a bit of sidewall depth
+    const tread = new THREE.Mesh(
+        new THREE.CylinderGeometry(R * 1.01, R * 1.01, W * 0.6, 22),
+        new THREE.MeshPhongMaterial({ color: 0x0c0d0f, shininess: 10 })
+    );
+    tread.rotation.z = Math.PI / 2;
+    wheel.add(tread);
+
+    const rim = new THREE.Mesh(
+        new THREE.CylinderGeometry(R * 0.6, R * 0.6, W + 0.05, 18),
+        new THREE.MeshPhongMaterial({ color: 0xc4c9d1, shininess: 150 })
+    );
+    rim.rotation.z = Math.PI / 2;
+    wheel.add(rim);
+
+    const hub = new THREE.Mesh(
+        new THREE.CylinderGeometry(R * 0.18, R * 0.18, W + 0.1, 12),
+        new THREE.MeshPhongMaterial({ color: 0x33373e, shininess: 90 })
+    );
+    hub.rotation.z = Math.PI / 2;
+    wheel.add(hub);
+
+    const spokeMat = new THREE.MeshPhongMaterial({ color: 0xd9dce1, shininess: 120 });
+    for (let s = 0; s < 3; s++) {
+        const spoke = new THREE.Mesh(new THREE.BoxGeometry(W + 0.06, 0.1, R * 1.65), spokeMat);
+        spoke.rotation.x = (s / 3) * Math.PI; // 3 bars => 6-spoke look
+        wheel.add(spoke);
+    }
+    return wheel;
+}
+
 function createCarMesh(color) {
     const g = new THREE.Group();
-    const bodyMat = new THREE.MeshPhongMaterial({ color, shininess: 80 });
+    const bodyMat = new THREE.MeshPhongMaterial({ color, shininess: 90 });
 
-    const body = new THREE.Mesh(new THREE.BoxGeometry(2, 0.8, 4), bodyMat);
-    body.position.y = 0.7; body.castShadow = true; g.add(body);
+    // Main body + a lower nose wedge for a sleeker silhouette.
+    const body = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.7, 4.2), bodyMat);
+    body.position.y = 0.85; body.castShadow = true; g.add(body);
 
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.4, 1.2), bodyMat);
+    nose.position.set(0, 0.62, 1.75); nose.castShadow = true; g.add(nose);
+
+    // Canopy/cabin.
     const cabin = new THREE.Mesh(
-        new THREE.BoxGeometry(1.5, 0.6, 1.8),
-        new THREE.MeshPhongMaterial({ color: 0x222831, shininess: 120 })
+        new THREE.BoxGeometry(1.45, 0.55, 1.7),
+        new THREE.MeshPhongMaterial({ color: 0x171f25, shininess: 150 })
     );
-    cabin.position.set(0, 1.25, -0.2); cabin.castShadow = true; g.add(cabin);
+    cabin.position.set(0, 1.42, 0.15); cabin.castShadow = true; g.add(cabin);
 
-    const spoiler = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.15, 0.5), bodyMat);
-    spoiler.position.set(0, 1.2, -2); g.add(spoiler);
+    // ---- Boost reactor (rear deck, faces the chase camera) ----
+    // A dark housing with a strip of emissive segments that light up to show
+    // how much nitro is charged, and surge when a boost is firing.
+    const deck = new THREE.Mesh(
+        new THREE.BoxGeometry(0.84, 0.16, 1.75),
+        new THREE.MeshPhongMaterial({ color: 0x0c0f12, shininess: 60 })
+    );
+    deck.position.set(0, 1.2, -1.05); g.add(deck);
 
-    const wheelGeo = new THREE.CylinderGeometry(0.55, 0.55, 0.5, 14);
-    const wheelMat = new THREE.MeshPhongMaterial({ color: 0x101010 });
-    [[1.05, 0.55, 1.3], [-1.05, 0.55, 1.3], [1.05, 0.55, -1.3], [-1.05, 0.55, -1.3]].forEach(p => {
-        const w = new THREE.Mesh(wheelGeo, wheelMat);
-        w.rotation.z = Math.PI / 2;
-        w.position.set(p[0], p[1], p[2]);
-        w.castShadow = true; g.add(w);
+    const boostSegs = [];
+    const SEG = 6;
+    for (let i = 0; i < SEG; i++) {
+        const seg = new THREE.Mesh(
+            new THREE.BoxGeometry(0.54, 0.15, 0.2),
+            new THREE.MeshBasicMaterial({ color: 0x07242a })
+        );
+        seg.position.set(0, 1.3, -0.4 - i * 0.25); // front segment fills first
+        g.add(seg);
+        boostSegs.push(seg);
+    }
+
+    // Rear wing on struts.
+    const wing = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.12, 0.55), bodyMat);
+    wing.position.set(0, 1.52, -2.05); g.add(wing);
+    [-0.85, 0.85].forEach(sx => {
+        const strut = new THREE.Mesh(
+            new THREE.BoxGeometry(0.12, 0.42, 0.12),
+            new THREE.MeshPhongMaterial({ color: 0x202327 })
+        );
+        strut.position.set(sx, 1.32, -2.0); g.add(strut);
     });
 
-    g._bodyMat = bodyMat; // keep handle for boost tint
+    // ---- Wheels (steerable fronts, all roll) ----
+    const wheels = [];
+    [
+        { x: 1.07, z: 1.4, front: true },
+        { x: -1.07, z: 1.4, front: true },
+        { x: 1.07, z: -1.5, front: false },
+        { x: -1.07, z: -1.5, front: false }
+    ].forEach(d => {
+        const pivot = new THREE.Group();          // front pivot steers
+        pivot.position.set(d.x, WHEEL_RADIUS, d.z);
+        const spinner = createWheel();            // spins to roll
+        pivot.add(spinner);
+        g.add(pivot);
+        wheels.push({ pivot, spinner, front: d.front });
+    });
+
+    g._bodyMat = bodyMat;
+    g._boostSegs = boostSegs;
+    g._wheels = wheels;
     scene.add(g);
     return g;
 }
@@ -931,9 +1021,52 @@ function applyTransform(r, ctrlSteer) {
     const roll = -ctrlSteer * Math.min(Math.abs(r.speed) / r.maxSpeed, 1) * 0.12;
     r.mesh.rotation.z = roll;
     r.mesh.rotation.x = (r.airborne) ? clamp(-r.vy * 1.2, -0.5, 0.5) : 0;
+
+    // Wheels: roll proportional to forward speed; front wheels steer.
+    r._wheelSpin = (r._wheelSpin || 0) + r.speed / WHEEL_RADIUS;
+    const steerAngle = clamp(ctrlSteer, -1, 1) * 0.5;
+    const wheels = r.mesh._wheels;
+    if (wheels) {
+        for (let i = 0; i < wheels.length; i++) {
+            wheels[i].spinner.rotation.x = r._wheelSpin;
+            if (wheels[i].front) wheels[i].pivot.rotation.y = steerAngle;
+        }
+    }
+
+    updateBoostReactor(r);
+
+    // Subtle whole-body glow while a boost is firing (no per-frame allocation).
     if (r.mesh._bodyMat) {
-        r.mesh._bodyMat.emissive = new THREE.Color(r.boostTime > 0 ? 0x00e5ff : 0x000000);
-        r.mesh._bodyMat.emissiveIntensity = r.boostTime > 0 ? 0.6 : 0;
+        const boosting = r.boostTime > 0;
+        r.mesh._bodyMat.emissive.setHex(boosting ? 0x0a7d96 : 0x000000);
+        r.mesh._bodyMat.emissiveIntensity = boosting ? 0.5 : 0;
+    }
+}
+
+// Light the roof reactor strip to match the car's nitro state:
+//   charging  -> cyan segments fill from the front as charge rises
+//   ready      -> all segments shimmer toward white
+//   boosting   -> whole strip surges orange and pulses
+function updateBoostReactor(r) {
+    const segs = r.mesh._boostSegs;
+    if (!segs) return;
+    const n = segs.length;
+    const charge = clamp(r.nitroCharge, 0, 1);
+    const lit = Math.round(charge * n);
+    const boosting = r.boostTime > 0;
+    const ready = charge >= 0.999;
+    const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.012);
+    for (let i = 0; i < n; i++) {
+        const c = segs[i].material.color;
+        if (boosting) {
+            const s = 0.6 + 0.4 * pulse;
+            c.setRGB(1.0 * s, 0.5 * s, 0.12 * s);
+        } else if (i < lit) {
+            if (ready) c.setRGB(0.55 * pulse, 0.9, 1.0); // white-cyan shimmer
+            else c.setRGB(0.0, 0.85, 1.0);               // steady cyan
+        } else {
+            c.setRGB(0.03, 0.13, 0.16);                  // dim/empty
+        }
     }
 }
 
