@@ -11,6 +11,7 @@
 //   Nitro            - round button on the right (or SPACE).
 //                      Fires a manual boost when charged.
 //   (Keyboard: A/D or arrows steer, W/S or up/down throttle.)
+//   (Gamepad: left stick steers + throttles, A button fires nitro.)
 //
 // Drive over the cyan boost pads for a free speed surge and a
 // nitro top-up. 3 laps, 4 cars, collisions on.
@@ -945,6 +946,7 @@ function positionCamera(snap) {
 // ------------------------------------------------------------
 function update() {
     pollKeyboard();
+    pollGamepad();
 
     racers.forEach(r => {
         let ctrl;
@@ -1275,6 +1277,53 @@ document.addEventListener('keyup', (e) => {
     const k = keyMap[e.key.toLowerCase()];
     if (k) { e.preventDefault(); keys[k] = false; }
 });
+
+// ------------------------------------------------------------
+// Gamepad (Nintendo Switch Pro Controller, Xbox, etc.)
+// Left stick steers (and throttles: push up to accelerate, down to
+// brake/reverse). The A button fires nitro.
+// ------------------------------------------------------------
+const gamepad = { index: null, nitroLatch: false };
+const GP_DEADZONE = 0.18;
+
+window.addEventListener('gamepadconnected', (e) => { gamepad.index = e.gamepad.index; });
+window.addEventListener('gamepaddisconnected', (e) => {
+    if (gamepad.index === e.gamepad.index) gamepad.index = null;
+});
+
+function activeGamepad() {
+    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    if (gamepad.index !== null && pads[gamepad.index]) return pads[gamepad.index];
+    for (const p of pads) { if (p) { gamepad.index = p.index; return p; } }
+    return null;
+}
+
+function pollGamepad() {
+    if (joystick.isActive) return; // on-screen touch joystick takes priority
+    const gp = activeGamepad();
+    if (!gp) return;
+
+    // Left stick: axes[0] = steer (left/right), axes[1] = throttle (up = forward).
+    const ax = gp.axes[0] || 0;
+    const ay = gp.axes[1] || 0;
+    const steer = Math.abs(ax) > GP_DEADZONE ? ax : 0;
+    const throttle = Math.abs(ay) > GP_DEADZONE ? -ay : 0; // stick up is negative
+
+    // A button = boost. On the Switch Pro Controller's standard mapping the
+    // physical A button (right face position) is button index 1.
+    const aBtn = !!(gp.buttons[1] && gp.buttons[1].pressed);
+    if (aBtn && !gamepad.nitroLatch) input.nitro = true; // edge-triggered (one fire per press)
+    gamepad.nitroLatch = aBtn;
+
+    if (steer === 0 && throttle === 0) return; // let keyboard/idle stand
+    input.steer = clamp(steer, -1, 1);
+    input.throttle = clamp(throttle, -1, 1);
+
+    // Reflect stick position on the on-screen joystick for feedback.
+    joystick.element.classList.add('active');
+    joystick.stick.style.transform =
+        `translate(calc(-50% + ${input.steer * joystick.radius}px), calc(-50% + ${-input.throttle * joystick.radius}px))`;
+}
 
 window.addEventListener('resize', handleResize);
 window.addEventListener('orientationchange', () => setTimeout(handleResize, 200));
