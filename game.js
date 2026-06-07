@@ -27,7 +27,17 @@ let tangents = [];       // unit tangent at each sample (horizontal)
 let SAMPLES = 0;
 const ROAD_WIDTH = 14;
 const ROAD_HALF = ROAD_WIDTH / 2;
-const TOTAL_LAPS = 3;
+let TOTAL_LAPS = 3;
+
+const CAMERA_MODES = {
+    close:  { back: 10, height: 5.5, ahead: 6  },
+    normal: { back: 15, height: 8.5, ahead: 9  },
+    far:    { back: 22, height: 12,  ahead: 13 }
+};
+
+// Finish gate structure always visible; banner only on final lap
+let finishGate = null;
+let finishGateBanner = null;
 
 // Boost pads
 let boostPads = [];      // { x, z, mesh }
@@ -74,8 +84,7 @@ const joystick = {
 const hud = {
     pos: document.getElementById('posValue'),
     lap: document.getElementById('lapValue'),
-    time: document.getElementById('timeValue'),
-    best: document.getElementById('bestValue'),
+    raceTime: document.getElementById('raceTimeValue'),
     speed: document.getElementById('speedValue'),
     speedBar: document.getElementById('speedBar'),
     speedGrad: document.getElementById('speedGrad'),
@@ -239,6 +248,7 @@ function buildScene() {
 
     buildWorld();
     buildTrack();
+    buildFinishGate();
     buildBoostPads();
     buildRamps();
     buildFoliage();
@@ -353,6 +363,41 @@ function buildTrack() {
     buildCurbs(rightEdge);
     buildCenterLine();
     buildStartLine(centerPoints[0], tangents[0]);
+}
+
+function buildFinishGate() {
+    const p = centerPoints[0];
+    const t = tangents[0];
+    // Add π so the banner front faces the player approaching the line
+    const angle = Math.atan2(t.x, t.z) + Math.PI;
+
+    const group = new THREE.Group();
+    group.position.set(p.x, p.y, p.z);
+    group.rotation.y = angle;
+
+    // "FINISH" banner (canvas texture on a double-sided plane)
+    const bannerW = ROAD_WIDTH + 5;
+    const bCanvas = document.createElement('canvas');
+    bCanvas.width = 512; bCanvas.height = 128;
+    const bCtx = bCanvas.getContext('2d');
+    bCtx.clearRect(0, 0, 512, 128);
+    bCtx.font = 'bold italic 96px sans-serif';
+    bCtx.textAlign = 'center';
+    bCtx.textBaseline = 'middle';
+    bCtx.fillStyle = '#ffffff';
+    bCtx.shadowColor = 'rgba(0,0,0,0.5)';
+    bCtx.shadowBlur = 12;
+    bCtx.fillText('FINISH', 256, 64);
+    const bannerTex = new THREE.CanvasTexture(bCanvas);
+    const bannerMat = new THREE.MeshBasicMaterial({ map: bannerTex, transparent: true, side: THREE.DoubleSide, depthWrite: false });
+    const banner = new THREE.Mesh(new THREE.PlaneGeometry(bannerW, bannerW / 4), bannerMat);
+    banner.position.set(0, 10, 0);
+    banner.visible = false; // shown only on the final lap
+    group.add(banner);
+
+    scene.add(group);
+    finishGate = group;
+    finishGateBanner = banner;
 }
 
 // Vertical "embankment" walls dropping from an elevated road edge
@@ -933,6 +978,7 @@ function placeRacersAtStart() {
     });
 
     positionCamera(true);
+    setHudVisible(true);
 }
 
 // ------------------------------------------------------------
@@ -1212,16 +1258,16 @@ function handleCollisions() {
 // Camera follows the player
 // ------------------------------------------------------------
 function positionCamera(snap) {
-    const back = 15, height = 8.5, ahead = 9;
+    const cam = CAMERA_MODES[profile.cameraMode] || CAMERA_MODES.normal;
     const fx = Math.sin(player.heading), fz = Math.cos(player.heading);
     const dest = new THREE.Vector3(
-        player.x - fx * back,
-        height + player.y,
-        player.z - fz * back
+        player.x - fx * cam.back,
+        cam.height + player.y,
+        player.z - fz * cam.back
     );
     if (snap) camera.position.copy(dest);
     else camera.position.lerp(dest, 0.12);
-    camera.lookAt(player.x + fx * ahead, 1 + player.y, player.z + fz * ahead);
+    camera.lookAt(player.x + fx * cam.ahead, 1 + player.y, player.z + fz * cam.ahead);
 }
 
 // ------------------------------------------------------------
@@ -1303,6 +1349,13 @@ function formatTime(sec) {
     return `${m}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
 }
 
+function formatTimeSec(sec) {
+    if (sec === null || sec === undefined) return '0:00';
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return `${m}:${String(s).padStart(2, '0')}`;
+}
+
 function playerPosition() {
     const sorted = [...racers].sort((a, b) => raceScore(b) - raceScore(a));
     return sorted.indexOf(player) + 1;
@@ -1314,10 +1367,11 @@ const SPEED_MPH = 215;
 const SPEED_BAR_MAX = 1.6;
 
 function updateHUD() {
+    if (finishGateBanner && player) finishGateBanner.visible = (player.lap >= TOTAL_LAPS && !player.finished);
+
     hud.pos.textContent = `${playerPosition()}/${racers.length}`;
     hud.lap.textContent = `${Math.min(player.lap, TOTAL_LAPS)}/${TOTAL_LAPS}`;
-    hud.time.textContent = formatTime(race.elapsed);
-    hud.best.textContent = formatTime(player.bestLap);
+    hud.raceTime.textContent = formatTimeSec(race.elapsed);
 
     const spd = Math.abs(player.speed);
     hud.speed.textContent = Math.round(spd * SPEED_MPH);
@@ -1353,80 +1407,99 @@ const minimap = {
 };
 if (minimap.canvas) minimap.ctx = minimap.canvas.getContext('2d');
 
-// Recompute the world->canvas mapping and cache the track outline for the
-// current track. Called whenever a track is (re)built.
+// Set canvas resolution to match CSS size. Called whenever a track is (re)built.
 function setupMinimap() {
     const mm = minimap;
     if (!mm.ctx || !centerPoints.length) return;
-    const cssSize = mm.canvas.clientWidth || 130;
+    const cssSize = mm.canvas.clientWidth || 180;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     mm.size = cssSize;
     mm.dpr = dpr;
     mm.canvas.width = Math.round(cssSize * dpr);
     mm.canvas.height = Math.round(cssSize * dpr);
-
-    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    for (const p of centerPoints) {
-        if (p.x < minX) minX = p.x;
-        if (p.x > maxX) maxX = p.x;
-        if (p.z < minZ) minZ = p.z;
-        if (p.z > maxZ) maxZ = p.z;
-    }
-    const pad = 12;
-    const avail = cssSize - pad * 2;
-    const worldW = (maxX - minX) || 1, worldH = (maxZ - minZ) || 1;
-    const scale = avail / Math.max(worldW, worldH);
-    const ox = pad + (avail - worldW * scale) / 2;
-    const oy = pad + (avail - worldH * scale) / 2;
-    mm.map = (x, z) => ({ x: ox + (x - minX) * scale, y: oy + (z - minZ) * scale });
-    mm.pts = centerPoints.map(p => mm.map(p.x, p.z));
+    mm.ready = true;
 }
 
 function drawMinimap() {
     const mm = minimap;
-    if (!mm.ctx || !mm.pts) return;
+    if (!mm.ctx || !mm.ready || !centerPoints.length) return;
+    const player = racers.find(r => r.isPlayer);
+    if (!player) return;
+
     const ctx = mm.ctx;
     ctx.setTransform(mm.dpr, 0, 0, mm.dpr, 0, 0);
     ctx.clearRect(0, 0, mm.size, mm.size);
 
-    // Course outline.
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = 3.5;
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+    const size = mm.size;
+    const cx = size / 2, cy = size / 2;
+    const viewRadius = 85; // world units from center to canvas edge
+    const scale = (size * 0.46) / viewRadius;
+
+    // Clip to circle
+    ctx.save();
     ctx.beginPath();
-    mm.pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+    ctx.arc(cx, cy, size * 0.46, 0, Math.PI * 2);
+    ctx.clip();
+
+    // World -> canvas centered on player
+    const wc = (x, z) => ({
+        x: cx + (x - player.x) * scale,
+        y: cy + (z - player.z) * scale
+    });
+
+    // Track outline with subtle shadow for readability on any background
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.shadowColor = 'rgba(0,0,0,0.7)';
+    ctx.shadowBlur = 4;
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = 'rgba(255,255,255,0.80)';
+    ctx.beginPath();
+    let first = true;
+    for (const p of centerPoints) {
+        const mp = wc(p.x, p.z);
+        if (first) { ctx.moveTo(mp.x, mp.y); first = false; }
+        else ctx.lineTo(mp.x, mp.y);
+    }
     ctx.closePath();
     ctx.stroke();
+    ctx.shadowBlur = 0;
 
-    // Start/finish marker.
-    const s = mm.pts[0];
+    // Start/finish marker (yellow dot)
+    const sf = wc(centerPoints[0].x, centerPoints[0].z);
     ctx.fillStyle = '#ffd166';
-    ctx.fillRect(s.x - 2.5, s.y - 2.5, 5, 5);
+    ctx.beginPath();
+    ctx.arc(sf.x, sf.y, 4, 0, Math.PI * 2);
+    ctx.fill();
 
-    // Racers: AI as dots, the player as a heading arrow.
+    // Racers: AI dots, player arrow
     for (const r of racers) {
-        const p = mm.map(r.x, r.z);
+        const dist = Math.hypot(r.x - player.x, r.z - player.z);
+        if (!r.isPlayer && dist > viewRadius * 1.3) continue;
+        const p = wc(r.x, r.z);
         const col = hexToCss(r.baseColor);
         if (r.isPlayer) {
             const dx = Math.sin(r.heading), dz = Math.cos(r.heading);
             const nx = -dz, nz = dx;
             ctx.beginPath();
-            ctx.moveTo(p.x + dx * 7, p.y + dz * 7);
-            ctx.lineTo(p.x - dx * 4 + nx * 4, p.y - dz * 4 + nz * 4);
-            ctx.lineTo(p.x - dx * 4 - nx * 4, p.y - dz * 4 - nz * 4);
+            ctx.moveTo(p.x + dx * 9, p.y + dz * 9);
+            ctx.lineTo(p.x - dx * 5 + nx * 5, p.y - dz * 5 + nz * 5);
+            ctx.lineTo(p.x - dx * 5 - nx * 5, p.y - dz * 5 - nz * 5);
             ctx.closePath();
             ctx.fillStyle = col;
             ctx.fill();
-            ctx.lineWidth = 1.5;
+            ctx.lineWidth = 2;
             ctx.strokeStyle = '#fff';
             ctx.stroke();
         } else {
             ctx.beginPath();
-            ctx.arc(p.x, p.y, 3.2, 0, Math.PI * 2);
+            ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
             ctx.fillStyle = col;
             ctx.fill();
         }
     }
+
+    ctx.restore();
 }
 
 function showCenter(html, persist) {
@@ -1481,24 +1554,40 @@ function finishRace() {
     recordResult();
     const place = player.finishOrder || playerPosition();
     const ord = ['', '1st', '2nd', '3rd', '4th', '5th', '6th'][place] || (place + 'th');
-    const nextName = TRACKS[(currentTrackIndex + 1) % TRACKS.length].name;
-    showCenter(
-        `FINISH ${ord}<span class="sub">Time ${formatTime(player.finishTime || race.elapsed)} &middot; Best lap ${formatTime(player.bestLap)}</span><span class="sub" style="color:#ffd166">Tap for next track: ${nextName} &middot; ≡ for tracks</span>`,
-        true
-    );
+    setHudVisible(false);
+    document.getElementById('finishOrd').textContent = ord;
+    document.getElementById('finishOverlay').classList.add('show');
     waitForRestart();
 }
 
+function setHudVisible(on) {
+    ['speedHud', 'abilities', 'joystick', 'menuBtn'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.visibility = on ? '' : 'hidden';
+    });
+    const mm = document.getElementById('minimap');
+    if (mm) mm.style.visibility = (on && profile.showMinimap !== false) ? '' : 'hidden';
+    if (on) document.getElementById('finishOverlay').classList.remove('show');
+}
+
 function waitForRestart() {
+    let done = false;
     const restart = () => {
+        if (done) return;
+        done = true;
         document.removeEventListener('pointerdown', restart);
         document.removeEventListener('keydown', restart);
+        if (waitForRestart._pollId) { clearInterval(waitForRestart._pollId); waitForRestart._pollId = null; }
         resetRace();
     };
     waitForRestart._restart = restart;
     setTimeout(() => {
         document.addEventListener('pointerdown', restart);
         document.addEventListener('keydown', restart);
+        waitForRestart._pollId = setInterval(() => {
+            const gp = activeGamepad();
+            if (gp && gp.buttons.some(b => b.pressed)) restart();
+        }, 100);
     }, 900);
 }
 
@@ -1507,6 +1596,10 @@ function clearRestartListeners() {
         document.removeEventListener('pointerdown', waitForRestart._restart);
         document.removeEventListener('keydown', waitForRestart._restart);
         waitForRestart._restart = null;
+    }
+    if (waitForRestart._pollId) {
+        clearInterval(waitForRestart._pollId);
+        waitForRestart._pollId = null;
     }
 }
 
@@ -1542,6 +1635,7 @@ const menuEl = document.getElementById('menu');
 const trackListEl = document.getElementById('trackList');
 
 function buildMenu() {
+    if (!trackListEl) return;
     trackListEl.innerHTML = '';
     TRACKS.forEach((t, i) => {
         const card = document.createElement('button');
@@ -1564,7 +1658,7 @@ function showMenu() {
     clearRestartListeners();
     race.started = false;
     hideCenter();
-    buildMenu();
+    buildSettingsPanel();
     hideAllScreens();
     menuEl.classList.add('show');
 }
@@ -1589,7 +1683,11 @@ const PROFILE_KEY = 'mobmobs_profile';
 const DEFAULT_PROFILE = {
     name: 'Player', bodyColor: 0xe53935, reactorColor: 0x00e5ff,
     rimColor: 0xc4c9d1, finish: 'gloss',
-    races: 0, wins: 0, bestLap: null
+    races: 0, wins: 0, bestLap: null,
+    showDebugInfo: false,
+    showMinimap: true,
+    cameraMode: 'normal',
+    totalLaps: 3
 };
 const BODY_COLORS = [
     0xe53935, 0xff8f00, 0xfdd835, 0x43a047, 0x00acc1, 0x1e88e5,
@@ -1809,7 +1907,72 @@ if (nameInput) {
         nameInput.addEventListener(ev, (e) => e.stopPropagation()));
 }
 
-[['playBtn', showMenu], ['garageBtn', showGarage],
+function setToggleBtn(id, on) {
+    const btn = document.getElementById(id);
+    if (btn) { btn.textContent = on ? 'ON' : 'OFF'; btn.classList.toggle('on', on); }
+}
+
+function applySettings() {
+    // Debug info overlay
+    const topInfo = document.getElementById('topInfo');
+    if (topInfo) topInfo.style.display = profile.showDebugInfo ? 'flex' : 'none';
+
+    // Minimap visibility (respected by setHudVisible when race ends)
+    const mm = document.getElementById('minimap');
+    if (mm) mm.style.visibility = profile.showMinimap !== false ? '' : 'hidden';
+
+    // Laps
+    TOTAL_LAPS = profile.totalLaps || 3;
+
+    // Sync toggle buttons
+    setToggleBtn('debugToggle', !!profile.showDebugInfo);
+    setToggleBtn('minimapToggle', profile.showMinimap !== false);
+}
+
+function buildSegControl(containerId, values, labels, profileKey, onChange) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = '';
+    values.forEach((val, i) => {
+        const b = document.createElement('button');
+        b.className = 'seg-btn' + (profile[profileKey] === val ? ' selected' : '');
+        b.textContent = labels[i];
+        b.addEventListener('pointerdown', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            profile[profileKey] = val;
+            saveProfile();
+            if (onChange) onChange();
+            buildSegControl(containerId, values, labels, profileKey, onChange);
+        });
+        container.appendChild(b);
+    });
+}
+
+function buildSettingsPanel() {
+    buildSegControl('cameraControl', ['close', 'normal', 'far'], ['Close', 'Normal', 'Far'], 'cameraMode', null);
+    buildSegControl('lapsControl', [1, 3, 5], ['1', '3', '5'], 'totalLaps', () => { TOTAL_LAPS = profile.totalLaps || 3; });
+    applySettings();
+}
+
+const debugToggleBtn = document.getElementById('debugToggle');
+if (debugToggleBtn) {
+    debugToggleBtn.addEventListener('pointerdown', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        profile.showDebugInfo = !profile.showDebugInfo;
+        saveProfile(); applySettings();
+    });
+}
+
+const minimapToggleBtn = document.getElementById('minimapToggle');
+if (minimapToggleBtn) {
+    minimapToggleBtn.addEventListener('pointerdown', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        profile.showMinimap = !(profile.showMinimap !== false);
+        saveProfile(); applySettings();
+    });
+}
+
+[['playBtn', () => startTrack(currentTrackIndex)], ['garageBtn', showGarage],
  ['garageBackBtn', showHome], ['menuBackBtn', showHome]].forEach(([id, fn]) => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); fn(); });
@@ -2072,6 +2235,7 @@ function startGame() {
     handleResize();
     animateStarted = true;
     animate();
+    applySettings();
     showHome();              // land on the home screen first
 }
 

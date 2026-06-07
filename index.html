@@ -15,7 +15,7 @@
 <body>
     <div id="gameContainer"></div>
 
-    <!-- Top-left status: FPS + build/patch number -->
+    <!-- Debug info: FPS + build/patch — hidden by default, toggled in settings -->
     <div id="topInfo">
         <span class="ti-fps"><b id="fpsValue">--</b> FPS</span>
         <span class="ti-build" id="buildValue">v0.0.0</span>
@@ -39,21 +39,19 @@
             <div class="sh-side sh-side-right">
                 <span class="sh-side-label">LAP</span>
                 <span class="sh-side-val" id="lapValue">1/3</span>
+                <span class="sh-race-time" id="raceTimeValue">0:00</span>
             </div>
         </div>
-    </div>
-
-    <!-- Race timing (top-left, subtle) -->
-    <div id="raceInfo">
-        <div class="ri-row"><span class="ri-label">TIME</span><span id="timeValue">0:00.00</span></div>
-        <div class="ri-row"><span class="ri-label">BEST</span><span id="bestValue">--:--.--</span></div>
     </div>
 
     <!-- Mini-map (top-right): course outline + racer positions -->
     <canvas id="minimap"></canvas>
 
-    <!-- Center messages (countdown / boost / finish) -->
+    <!-- Center messages (countdown / boost) -->
     <div id="centerMessage"></div>
+
+    <!-- Finish screen: just the place ordinal, no other UI -->
+    <div id="finishOverlay"><span id="finishOrd"></span></div>
 
     <!-- Steering + throttle joystick (left): push to steer, push up to throttle -->
     <div id="joystick" class="joystick">
@@ -61,8 +59,8 @@
         <div class="joystick-stick"></div>
     </div>
 
-    <!-- Track select / menu button (top-right) -->
-    <button id="menuBtn" aria-label="Tracks">≡ TRACKS</button>
+    <!-- Settings button (top-right) -->
+    <button id="menuBtn" aria-label="Settings">⚙ SETTINGS</button>
 
     <!-- Ability buttons (right) -->
     <div id="abilities">
@@ -125,12 +123,30 @@
         </div>
     </div>
 
-    <!-- Track-select menu -->
+    <!-- Settings menu -->
     <div id="menu" class="menu">
         <div class="menu-panel">
-            <h1 class="title-sm">SELECT TRACK</h1>
-            <p class="menu-sub">Choose your circuit</p>
-            <div id="trackList" class="track-list"></div>
+            <h1 class="title-sm">SETTINGS</h1>
+
+            <div class="stg-toggles">
+                <div class="stg-row">
+                    <span class="stg-label">Minimap</span>
+                    <button class="stg-toggle" id="minimapToggle">ON</button>
+                </div>
+                <div class="stg-row">
+                    <span class="stg-label">Camera</span>
+                    <div class="seg-control stg-seg" id="cameraControl"></div>
+                </div>
+                <div class="stg-row">
+                    <span class="stg-label">Laps</span>
+                    <div class="seg-control stg-seg" id="lapsControl"></div>
+                </div>
+                <div class="stg-row">
+                    <span class="stg-label">FPS + Version</span>
+                    <button class="stg-toggle" id="debugToggle">OFF</button>
+                </div>
+            </div>
+
             <button class="btn-secondary" id="menuBackBtn">← Home</button>
         </div>
     </div>
