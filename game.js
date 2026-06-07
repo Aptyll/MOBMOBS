@@ -86,7 +86,7 @@ const hud = {
 };
 
 // Patch / build number shown top-left. Bump this with each gameplay update.
-const VERSION = 'v1.7.0';
+const VERSION = 'v1.8.0';
 if (hud.build) hud.build.textContent = VERSION;
 
 // Live FPS, averaged over a short window so the readout is steady.
@@ -733,7 +733,7 @@ function createWheel() {
     return wheel;
 }
 
-function createCarMesh(color) {
+function createCarMesh(color, reactorColor) {
     const g = new THREE.Group();
     const bodyMat = new THREE.MeshPhongMaterial({ color, shininess: 90 });
 
@@ -802,13 +802,14 @@ function createCarMesh(color) {
     g._bodyMat = bodyMat;
     g._boostSegs = boostSegs;
     g._wheels = wheels;
+    g._reactorRGB = hexToRGB01(reactorColor != null ? reactorColor : 0x00e5ff);
     scene.add(g);
     return g;
 }
 
 function makeRacer(opts) {
     return {
-        mesh: createCarMesh(opts.color),
+        mesh: createCarMesh(opts.color, opts.reactorColor),
         baseColor: opts.color,
         isPlayer: !!opts.isPlayer,
         x: 0, z: 0, y: 0, heading: 0, speed: 0,
@@ -834,7 +835,7 @@ function makeRacer(opts) {
 
 function buildRacers() {
     racers = [];
-    player = makeRacer({ color: 0xe53935, isPlayer: true });
+    player = makeRacer({ color: profile.bodyColor, reactorColor: profile.reactorColor, isPlayer: true });
     racers.push(player);
 
     const aiCount = 3;
@@ -1056,16 +1057,21 @@ function updateBoostReactor(r) {
     const boosting = r.boostTime > 0;
     const ready = charge >= 0.999;
     const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.012);
+    const rc = r.mesh._reactorRGB || [0, 0.85, 1]; // the car's chosen reactor colour
     for (let i = 0; i < n; i++) {
         const c = segs[i].material.color;
         if (boosting) {
             const s = 0.6 + 0.4 * pulse;
-            c.setRGB(1.0 * s, 0.5 * s, 0.12 * s);
+            c.setRGB(1.0 * s, 0.5 * s, 0.12 * s);    // orange surge (universal)
         } else if (i < lit) {
-            if (ready) c.setRGB(0.55 * pulse, 0.9, 1.0); // white-cyan shimmer
-            else c.setRGB(0.0, 0.85, 1.0);               // steady cyan
+            if (ready) {
+                const w = pulse * 0.55;              // shimmer toward white when full
+                c.setRGB(rc[0] + (1 - rc[0]) * w, rc[1] + (1 - rc[1]) * w, rc[2] + (1 - rc[2]) * w);
+            } else {
+                c.setRGB(rc[0], rc[1], rc[2]);       // steady fill
+            }
         } else {
-            c.setRGB(0.03, 0.13, 0.16);                  // dim/empty
+            c.setRGB(rc[0] * 0.14, rc[1] * 0.14, rc[2] * 0.14); // dim/empty
         }
     }
 }
@@ -1302,6 +1308,7 @@ function finishRacer(r, now) {
 
 function finishRace() {
     race.finished = true;
+    recordResult();
     const place = player.finishOrder || playerPosition();
     const ord = ['', '1st', '2nd', '3rd', '4th', '5th', '6th'][place] || (place + 'th');
     const nextName = TRACKS[(currentTrackIndex + 1) % TRACKS.length].name;
@@ -1351,7 +1358,7 @@ function loadTrack(i) {
 
 function startTrack(i) {
     clearRestartListeners();
-    hideMenu();
+    hideAllScreens();
     loadTrack(i);
     race.started = false;
     race.finished = false;
@@ -1388,6 +1395,7 @@ function showMenu() {
     race.started = false;
     hideCenter();
     buildMenu();
+    hideAllScreens();
     menuEl.classList.add('show');
 }
 
@@ -1403,6 +1411,131 @@ if (menuBtn) {
         showMenu();
     });
 }
+
+// ------------------------------------------------------------
+// Player profile + Home / Garage screens
+// ------------------------------------------------------------
+const PROFILE_KEY = 'mobmobs_profile';
+const DEFAULT_PROFILE = {
+    name: 'Player', bodyColor: 0xe53935, reactorColor: 0x00e5ff,
+    races: 0, wins: 0, bestLap: null
+};
+const BODY_COLORS = [
+    0xe53935, 0x1e88e5, 0x43a047, 0xfdd835, 0xff8f00,
+    0x8e24aa, 0x00acc1, 0xec407a, 0xeceff1, 0x263238
+];
+const REACTOR_COLORS = [0x00e5ff, 0x76ff03, 0xff3d00, 0xffea00, 0xd500f9, 0xffffff];
+
+let profile = loadProfile();
+
+function loadProfile() {
+    try {
+        const raw = localStorage.getItem(PROFILE_KEY);
+        if (raw) return Object.assign({}, DEFAULT_PROFILE, JSON.parse(raw));
+    } catch (e) { /* storage unavailable */ }
+    return Object.assign({}, DEFAULT_PROFILE);
+}
+function saveProfile() {
+    try { localStorage.setItem(PROFILE_KEY, JSON.stringify(profile)); } catch (e) { /* ignore */ }
+}
+
+function hexToCss(c) { return '#' + (c >>> 0).toString(16).padStart(6, '0').slice(-6); }
+function hexToRGB01(c) { return [((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255]; }
+
+// Record race outcome into the profile (called when the player finishes).
+function recordResult() {
+    profile.races = (profile.races || 0) + 1;
+    if ((player.finishOrder || playerPosition()) === 1) profile.wins = (profile.wins || 0) + 1;
+    if (player.bestLap != null && (profile.bestLap == null || player.bestLap < profile.bestLap)) {
+        profile.bestLap = player.bestLap;
+    }
+    saveProfile();
+}
+
+const homeEl = document.getElementById('home');
+const garageEl = document.getElementById('garage');
+const nameInput = document.getElementById('nameInput');
+const profileAvatar = document.getElementById('profileAvatar');
+const statRaces = document.getElementById('statRaces');
+const statWins = document.getElementById('statWins');
+const statBest = document.getElementById('statBest');
+const cpBody = document.getElementById('cpBody');
+const cpReactor = document.getElementById('cpReactor');
+const bodySwatches = document.getElementById('bodySwatches');
+const reactorSwatches = document.getElementById('reactorSwatches');
+
+function hideAllScreens() {
+    if (homeEl) homeEl.classList.remove('show');
+    if (garageEl) garageEl.classList.remove('show');
+    if (menuEl) menuEl.classList.remove('show');
+}
+
+function renderProfile() {
+    nameInput.value = profile.name || '';
+    profileAvatar.style.background = hexToCss(profile.bodyColor);
+    profileAvatar.textContent = ((profile.name || 'P').trim().charAt(0) || 'P').toUpperCase();
+    statRaces.textContent = profile.races || 0;
+    statWins.textContent = profile.wins || 0;
+    statBest.textContent = formatTime(profile.bestLap);
+}
+
+function showHome() {
+    clearRestartListeners();
+    race.started = false;
+    hideCenter();
+    renderProfile();
+    hideAllScreens();
+    homeEl.classList.add('show');
+}
+
+function updateCarPreview() {
+    cpBody.style.background = hexToCss(profile.bodyColor);
+    cpReactor.style.background = hexToCss(profile.reactorColor);
+    cpReactor.style.boxShadow = `0 0 12px ${hexToCss(profile.reactorColor)}`;
+}
+
+function buildSwatches(container, colors, key) {
+    container.innerHTML = '';
+    colors.forEach(c => {
+        const b = document.createElement('button');
+        b.className = 'swatch' + (c === profile[key] ? ' selected' : '');
+        b.style.background = hexToCss(c);
+        b.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            profile[key] = c;
+            saveProfile();
+            buildSwatches(container, colors, key); // refresh selection ring
+            updateCarPreview();
+        });
+        container.appendChild(b);
+    });
+}
+
+function showGarage() {
+    hideCenter();
+    updateCarPreview();
+    buildSwatches(bodySwatches, BODY_COLORS, 'bodyColor');
+    buildSwatches(reactorSwatches, REACTOR_COLORS, 'reactorColor');
+    hideAllScreens();
+    garageEl.classList.add('show');
+}
+
+if (nameInput) {
+    nameInput.addEventListener('input', () => {
+        profile.name = nameInput.value;
+        saveProfile();
+    });
+    // Don't let typing in the name field steer/boost the car.
+    ['keydown', 'keyup', 'pointerdown'].forEach(ev =>
+        nameInput.addEventListener(ev, (e) => e.stopPropagation()));
+}
+
+[['playBtn', showMenu], ['garageBtn', showGarage],
+ ['garageBackBtn', showHome], ['menuBackBtn', showHome]].forEach(([id, fn]) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); fn(); });
+});
 
 // ------------------------------------------------------------
 // Resize / fullscreen
@@ -1655,11 +1788,11 @@ function startGame() {
         return;
     }
     initRenderer();
-    loadTrack(0);            // render a track behind the menu
+    loadTrack(0);            // render a track behind the menus
     handleResize();
     animateStarted = true;
     animate();
-    showMenu();              // let the player pick a track first
+    showHome();              // land on the home screen first
 }
 
 if (document.readyState === 'loading') {

@@ -77,12 +77,62 @@
         </button>
     </div>
 
+    <!-- Home / main menu -->
+    <div id="home" class="menu">
+        <div class="menu-panel">
+            <h1>MOBMOBS</h1>
+            <p class="menu-sub">Arcade Track Racer</p>
+
+            <div class="profile-card">
+                <div class="pc-avatar" id="profileAvatar">P</div>
+                <div class="pc-info">
+                    <input id="nameInput" class="pc-name" maxlength="14" placeholder="Player" />
+                    <div class="pc-stats">
+                        <span><b id="statRaces">0</b> races</span>
+                        <span><b id="statWins">0</b> wins</span>
+                        <span>best <b id="statBest">--:--.--</b></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="home-actions">
+                <button class="btn-primary" id="playBtn">PLAY</button>
+                <button class="btn-secondary" id="garageBtn">GARAGE</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Garage / car customization -->
+    <div id="garage" class="menu">
+        <div class="menu-panel">
+            <h1 class="title-sm">GARAGE</h1>
+
+            <div class="car-preview" id="carPreview">
+                <div class="cp-wing"></div>
+                <div class="cp-reactor" id="cpReactor"></div>
+                <div class="cp-cabin"></div>
+                <div class="cp-body" id="cpBody"></div>
+                <div class="cp-wheel cp-wheel-l"></div>
+                <div class="cp-wheel cp-wheel-r"></div>
+            </div>
+
+            <p class="garage-label">Body colour</p>
+            <div class="swatch-grid" id="bodySwatches"></div>
+
+            <p class="garage-label">Reactor colour</p>
+            <div class="swatch-grid" id="reactorSwatches"></div>
+
+            <button class="btn-primary" id="garageBackBtn">DONE</button>
+        </div>
+    </div>
+
     <!-- Track-select menu -->
     <div id="menu" class="menu">
         <div class="menu-panel">
-            <h1>MOBMOBS</h1>
-            <p class="menu-sub">Choose your track</p>
+            <h1 class="title-sm">SELECT TRACK</h1>
+            <p class="menu-sub">Choose your circuit</p>
             <div id="trackList" class="track-list"></div>
+            <button class="btn-secondary" id="menuBackBtn">← Home</button>
         </div>
     </div>
 
