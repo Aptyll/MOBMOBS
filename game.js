@@ -39,6 +39,19 @@ const CAMERA_MODES = {
 let finishGate = null;
 let finishGateBanner = null;
 
+// ============================================================
+// Visual FX globals
+// ============================================================
+const FLAME_MAX  = 120;
+
+const _flame = { x: new Float32Array(FLAME_MAX), y: new Float32Array(FLAME_MAX), z: new Float32Array(FLAME_MAX), vx: new Float32Array(FLAME_MAX), vy: new Float32Array(FLAME_MAX), vz: new Float32Array(FLAME_MAX), life: new Float32Array(FLAME_MAX), col: new Float32Array(FLAME_MAX * 3), idx: 0 };
+
+let flameGeo = null, flamePts = null;
+
+// Screen FX state
+let _currentFov = 68;
+const BASE_FOV = 68, MAX_FOV = 71;
+
 // Boost pads
 let boostPads = [];      // { x, z, mesh }
 const BOOST_FRAMES = 90; // duration of a pad boost
@@ -255,6 +268,7 @@ function buildScene() {
     if (theme.mountains) buildMountains();
     buildRacers();
     placeRacersAtStart();
+    initParticles();
     updateJoystickCenter();
     setupMinimap();
 }
@@ -1051,7 +1065,6 @@ function stepRacer(r, ctrl) {
         if (ctrl.nitro && r.nitroCharge >= 1 && r.boostTime <= 0) {
             r.boostTime = NITRO_FRAMES;
             r.nitroCharge = 0;
-            if (r.isPlayer) showCenter('<span style="color:#ff6a4d">NITRO!</span>', false);
         }
 
         if (r.boostTime > 0) {
@@ -1216,7 +1229,6 @@ function checkBoosts(r) {
         if (dd < BOOST_RADIUS * BOOST_RADIUS) {
             if (r.boostTime < BOOST_FRAMES - 20) r.boostTime = BOOST_FRAMES;
             r.nitroCharge = Math.min(1, r.nitroCharge + 0.5); // pads top up nitro
-            if (r.isPlayer) showCenter('<span style="color:#00e5ff">BOOST!</span>', false);
         }
     }
 }
@@ -1265,9 +1277,19 @@ function positionCamera(snap) {
         cam.height + player.y,
         player.z - fz * cam.back
     );
-    if (snap) camera.position.copy(dest);
+    if (snap) { camera.position.copy(dest); _currentFov = BASE_FOV; }
     else camera.position.lerp(dest, 0.12);
+
     camera.lookAt(player.x + fx * cam.ahead, 1 + player.y, player.z + fz * cam.ahead);
+
+    // Dynamic FOV: widens at high speed
+    const spd = Math.abs(player.speed);
+    const targetFov = BASE_FOV + (MAX_FOV - BASE_FOV) * clamp(spd / 1.4, 0, 1);
+    _currentFov += (targetFov - _currentFov) * 0.08;
+    if (Math.abs(_currentFov - camera.fov) > 0.1) {
+        camera.fov = _currentFov;
+        camera.updateProjectionMatrix();
+    }
 }
 
 // ------------------------------------------------------------
@@ -1333,6 +1355,7 @@ function animate() {
     }
     if (steps === MAX_SUBSTEPS) _accum = 0; // dropped frames: don't spiral
 
+    updateParticles();
     renderer.render(scene, camera);
     drawMinimap();
     updateFps();
@@ -2224,6 +2247,86 @@ document.addEventListener('webkitfullscreenchange', handleResize);
 
 // ------------------------------------------------------------
 // Boot
+// ============================================================
+// Visual FX: particles (dust, sparks, boost flame) + screen overlays
+// ============================================================
+
+// Soft-circle sprite texture used for dust and flame particles
+function makeSpriteTexture(r, g, b) {
+    const sz = 64;
+    const c = document.createElement('canvas');
+    c.width = c.height = sz;
+    const ctx = c.getContext('2d');
+    const grad = ctx.createRadialGradient(sz/2, sz/2, 0, sz/2, sz/2, sz/2);
+    grad.addColorStop(0,   `rgba(${r},${g},${b},1)`);
+    grad.addColorStop(0.4, `rgba(${r},${g},${b},0.6)`);
+    grad.addColorStop(1,   `rgba(${r},${g},${b},0)`);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, sz, sz);
+    return new THREE.CanvasTexture(c);
+}
+
+function initParticles() {
+    _flame.idx = 0; _flame.life.fill(0);
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(FLAME_MAX * 3), 3));
+    geo.setAttribute('color',    new THREE.BufferAttribute(new Float32Array(FLAME_MAX * 3), 3));
+    flameGeo = geo;
+
+    flamePts = new THREE.Points(flameGeo, new THREE.PointsMaterial({
+        map: makeSpriteTexture(255, 160, 40), size: 3.0, transparent: true, opacity: 0.90,
+        vertexColors: true, sizeAttenuation: true,
+        depthWrite: false, blending: THREE.AdditiveBlending
+    }));
+    scene.add(flamePts);
+}
+
+// Emit a single boost-flame particle from exhaust
+function fxFlame(x, y, z, heading) {
+    const i = _flame.idx % FLAME_MAX;
+    _flame.idx++;
+    const fx = Math.sin(heading), fz = Math.cos(heading);
+    _flame.x[i] = x - fx * 1.5 + (Math.random() - 0.5) * 0.6;
+    _flame.y[i] = y + 0.3 + (Math.random() - 0.5) * 0.3;
+    _flame.z[i] = z - fz * 1.5 + (Math.random() - 0.5) * 0.6;
+    _flame.vx[i] = -fx * (0.12 + Math.random() * 0.08);
+    _flame.vy[i] = 0.03 + Math.random() * 0.03;
+    _flame.vz[i] = -fz * (0.12 + Math.random() * 0.08);
+    _flame.life[i] = 1.0;
+}
+
+let _lastPtTime = performance.now();
+
+function updateParticles() {
+    if (!flameGeo) return;
+
+    const now = performance.now();
+    const dt  = clamp((now - _lastPtTime) / 16.667, 0.1, 4);
+    _lastPtTime = now;
+
+    // Boost flame
+    if (player && race.started && !race.finished && player.boostTime > 0) {
+        fxFlame(player.x, player.y, player.z, player.heading);
+    }
+
+    // Advance and write flame
+    const fp = flameGeo.attributes.position.array;
+    const fc = flameGeo.attributes.color.array;
+    for (let i = 0; i < FLAME_MAX; i++) {
+        if (_flame.life[i] <= 0) { fp[i*3+1] = -200; continue; }
+        _flame.life[i] -= dt / 18;
+        _flame.x[i] += _flame.vx[i] * dt;
+        _flame.y[i] += _flame.vy[i] * dt;
+        _flame.z[i] += _flame.vz[i] * dt;
+        const lf = clamp(_flame.life[i], 0, 1);
+        fp[i*3] = _flame.x[i]; fp[i*3+1] = _flame.y[i]; fp[i*3+2] = _flame.z[i];
+        fc[i*3] = 1.0; fc[i*3+1] = lf * 0.55; fc[i*3+2] = lf * lf * 0.1;
+    }
+    flameGeo.attributes.position.needsUpdate = true;
+    flameGeo.attributes.color.needsUpdate    = true;
+}
+
 // ------------------------------------------------------------
 function startGame() {
     if (typeof THREE === 'undefined') {
