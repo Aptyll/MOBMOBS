@@ -86,7 +86,7 @@ const hud = {
 };
 
 // Patch / build number shown top-left. Bump this with each gameplay update.
-const VERSION = 'v1.3.0';
+const VERSION = 'v1.4.0';
 if (hud.build) hud.build.textContent = VERSION;
 
 // Live FPS, averaged over a short window so the readout is steady.
@@ -257,6 +257,43 @@ function buildWorld() {
 }
 
 // ------------------------------------------------------------
+// Geometry batching: bake many small meshes that share a material into a
+// single BufferGeometry so the whole batch costs ONE draw call. This is the
+// difference between ~2400 draw calls (one per curb / tree part) and ~15.
+// ------------------------------------------------------------
+function makeMerger(useColor) {
+    return { pos: [], norm: [], col: useColor ? [] : null };
+}
+
+// Bake `geo` (transformed by `matrix`) into the accumulator. Optional per-part
+// `color` is written as vertex colors so a batch can still carry variation.
+// Consumes `geo` (disposed after copying).
+function mergeGeo(acc, geo, matrix, color) {
+    if (matrix) geo.applyMatrix4(matrix);
+    const g = geo.index ? geo.toNonIndexed() : geo;
+    const p = g.attributes.position.array;
+    const n = g.attributes.normal ? g.attributes.normal.array : null;
+    for (let i = 0; i < p.length; i++) {
+        acc.pos.push(p[i]);
+        acc.norm.push(n ? n[i] : 0);
+    }
+    if (acc.col) {
+        const c = color || { r: 1, g: 1, b: 1 };
+        for (let v = 0; v < p.length / 3; v++) acc.col.push(c.r, c.g, c.b);
+    }
+    if (g !== geo) g.dispose();
+    geo.dispose();
+}
+
+function mergerMesh(acc, material) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(acc.pos, 3));
+    geo.setAttribute('normal', new THREE.Float32BufferAttribute(acc.norm, 3));
+    if (acc.col) geo.setAttribute('color', new THREE.Float32BufferAttribute(acc.col, 3));
+    return new THREE.Mesh(geo, material);
+}
+
+// ------------------------------------------------------------
 // Track
 // ------------------------------------------------------------
 function buildTrack() {
@@ -339,24 +376,27 @@ function buildSkirts(edge) {
 
 function buildCurbs(edge) {
     const stripe = 6;
-    const whiteMat = new THREE.MeshLambertMaterial({ color: 0xf2f2f2 });
-    const redMat = new THREE.MeshLambertMaterial({ color: 0xd23b2e });
+    const white = makeMerger(), red = makeMerger();
+    const m = new THREE.Matrix4();
     for (let i = 0; i < SAMPLES; i++) {
         const a = edge[i], b = edge[(i + 1) % SAMPLES];
         const dx = b.x - a.x, dz = b.z - a.z;
         const segLen = Math.hypot(dx, dz);
         if (segLen < 0.001) continue;
         const geo = new THREE.BoxGeometry(0.9, 0.25, segLen + 0.15);
-        const mat = (Math.floor(i / stripe) % 2 === 0) ? whiteMat : redMat;
-        const seg = new THREE.Mesh(geo, mat);
-        seg.position.set((a.x + b.x) / 2, (a.y + b.y) / 2 + 0.12, (a.z + b.z) / 2);
-        seg.rotation.y = Math.atan2(dx, dz);
-        scene.add(seg);
+        m.makeRotationY(Math.atan2(dx, dz));
+        m.setPosition((a.x + b.x) / 2, (a.y + b.y) / 2 + 0.12, (a.z + b.z) / 2);
+        mergeGeo((Math.floor(i / stripe) % 2 === 0) ? white : red, geo, m);
     }
+    scene.add(mergerMesh(white, new THREE.MeshLambertMaterial({ color: 0xf2f2f2 })));
+    scene.add(mergerMesh(red, new THREE.MeshLambertMaterial({ color: 0xd23b2e })));
 }
 
 function buildCenterLine() {
     const dashMat = new THREE.MeshBasicMaterial({ color: currentTrack.theme.center });
+    const acc = makeMerger();
+    const m = new THREE.Matrix4();
+    const rotX = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
     const step = 6;
     for (let i = 0; i < SAMPLES; i += step * 2) {
         const a = centerPoints[i], b = centerPoints[Math.min(i + step, SAMPLES - 1)];
@@ -364,12 +404,12 @@ function buildCenterLine() {
         const segLen = Math.hypot(dx, dz);
         if (segLen < 0.001) continue;
         const geo = new THREE.PlaneGeometry(0.45, segLen);
-        const dash = new THREE.Mesh(geo, dashMat);
-        dash.rotation.x = -Math.PI / 2;
-        dash.rotation.z = -Math.atan2(dx, dz);
-        dash.position.set((a.x + b.x) / 2, (a.y + b.y) / 2 + 0.02, (a.z + b.z) / 2);
-        scene.add(dash);
+        m.makeRotationY(Math.atan2(dx, dz));
+        m.multiply(rotX);
+        m.setPosition((a.x + b.x) / 2, (a.y + b.y) / 2 + 0.02, (a.z + b.z) / 2);
+        mergeGeo(acc, geo, m);
     }
+    scene.add(mergerMesh(acc, dashMat));
 }
 
 function buildStartLine(point, t) {
@@ -519,61 +559,49 @@ function trackHeightAt(r) {
 // ------------------------------------------------------------
 // Foliage (hand-painted, low-poly trees + bushes)
 // ------------------------------------------------------------
-function makeTree(x, z, scale, baseY, opts) {
-    opts = opts || {};
-    const g = new THREE.Group();
-    const hueShift = (Math.random() - 0.5) * 0.06;
+// Foliage is batched by material into shared geometries (see makeMerger):
+// M.trunk, M.leaf (vertex-coloured for per-tree hue), M.cap, M.bush. Each tree
+// part is transform-baked into the right batch instead of becoming its own mesh.
+function addTree(x, z, scale, baseY, opts, M) {
+    const rotY = Math.random() * Math.PI * 2;
+    const gm = new THREE.Matrix4().compose(
+        new THREE.Vector3(x, baseY, z),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(0, rotY, 0)),
+        new THREE.Vector3(scale, scale, scale)
+    );
+    const at = (ox, oy, oz) =>
+        new THREE.Matrix4().multiplyMatrices(gm, new THREE.Matrix4().makeTranslation(ox, oy, oz));
 
-    const trunkMat = new THREE.MeshLambertMaterial({ color: 0x7a5230, flatShading: true });
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.55, 2.2, 5), trunkMat);
-    trunk.position.y = 1.1;
-    g.add(trunk);
+    mergeGeo(M.trunk, new THREE.CylinderGeometry(0.4, 0.55, 2.2, 5), at(0, 1.1, 0));
 
     // Forest is darker/lusher; default greens are brighter.
-    const baseHue = 0.30;
+    const hueShift = (Math.random() - 0.5) * 0.06;
     const light = opts.dark ? 0.24 + Math.random() * 0.06 : 0.38 + Math.random() * 0.08;
     const sat = opts.dark ? 0.55 : 0.5;
-    const green = new THREE.Color().setHSL(baseHue + hueShift, sat, light);
-    const leafMat = new THREE.MeshLambertMaterial({ color: green, flatShading: true });
+    const green = new THREE.Color().setHSL(0.30 + hueShift, sat, light);
 
     if (opts.pine || Math.random() < 0.5) {
-        // pine: stacked low-poly cones
         for (let i = 0; i < 3; i++) {
-            const cone = new THREE.Mesh(new THREE.ConeGeometry(2.0 - i * 0.45, 2.0, 6), leafMat);
-            cone.position.y = 2.6 + i * 1.3;
-            g.add(cone);
+            mergeGeo(M.leaf, new THREE.ConeGeometry(2.0 - i * 0.45, 2.0, 6), at(0, 2.6 + i * 1.3, 0), green);
             if (opts.snow) {
-                // snow cap on each tier
-                const cap = new THREE.Mesh(
-                    new THREE.ConeGeometry((2.0 - i * 0.45) * 0.6, 0.7, 6),
-                    new THREE.MeshLambertMaterial({ color: 0xf5f9ff, flatShading: true })
-                );
-                cap.position.y = 3.4 + i * 1.3;
-                g.add(cap);
+                mergeGeo(M.cap, new THREE.ConeGeometry((2.0 - i * 0.45) * 0.6, 0.7, 6), at(0, 3.4 + i * 1.3, 0));
             }
         }
     } else {
-        const blob = new THREE.Mesh(new THREE.IcosahedronGeometry(2.1, 0), leafMat);
-        blob.position.y = 3.4; g.add(blob);
-        const blob2 = new THREE.Mesh(new THREE.IcosahedronGeometry(1.5, 0), leafMat);
-        blob2.position.set(1.0, 2.7, 0.5); g.add(blob2);
+        mergeGeo(M.leaf, new THREE.IcosahedronGeometry(2.1, 0), at(0, 3.4, 0), green);
+        mergeGeo(M.leaf, new THREE.IcosahedronGeometry(1.5, 0), at(1.0, 2.7, 0.5), green);
     }
-
-    g.position.set(x, baseY, z);
-    g.rotation.y = Math.random() * Math.PI * 2;
-    g.scale.setScalar(scale);
-    scene.add(g);
 }
 
-function makeBush(x, z, scale, baseY, opts) {
-    opts = opts || {};
+function addBush(x, z, scale, baseY, opts, M) {
     const light = opts.dark ? 0.22 : 0.34;
     const green = new THREE.Color().setHSL(0.3 + (Math.random() - 0.5) * 0.05, 0.45, light);
-    const mat = new THREE.MeshLambertMaterial({ color: green, flatShading: true });
-    const bush = new THREE.Mesh(new THREE.IcosahedronGeometry(1.2, 0), mat);
-    bush.position.set(x, baseY + 0.7 * scale, z);
-    bush.scale.setScalar(scale);
-    scene.add(bush);
+    const m = new THREE.Matrix4().compose(
+        new THREE.Vector3(x, baseY + 0.7 * scale, z),
+        new THREE.Quaternion(),
+        new THREE.Vector3(scale, scale, scale)
+    );
+    mergeGeo(M.bush, new THREE.IcosahedronGeometry(1.2, 0), m, green);
 }
 
 function buildFoliage() {
@@ -585,6 +613,13 @@ function buildFoliage() {
         pine:       { step: 7,  skip: 0.35, near: 4,  spread: 26, bushChance: 0.0,  opts: { pine: true, snow: true } },
         deepforest: { step: 5,  skip: 0.18, near: 5,  spread: 48, bushChance: 0.32, opts: { dark: true, pine: true } }
     }[kind] || { step: 9, skip: 0.45, near: 7, spread: 55, bushChance: 0.22, opts: {} };
+
+    const M = {
+        trunk: makeMerger(),
+        leaf: makeMerger(true),   // vertex colours keep per-tree hue variation
+        cap: makeMerger(),
+        bush: makeMerger(true)
+    };
 
     for (let i = 0; i < SAMPLES; i += cfg.step) {
         const c = centerPoints[i];
@@ -599,10 +634,16 @@ function buildFoliage() {
             const z = c.z + pz * side * dist + jitterZ;
             // Sit foliage near the local road height so it follows slopes.
             const baseY = Math.max(0, c.y - 1);
-            if (Math.random() < cfg.bushChance) makeBush(x, z, 0.8 + Math.random() * 0.7, baseY, cfg.opts);
-            else makeTree(x, z, 0.8 + Math.random() * 0.8, baseY, cfg.opts);
+            if (Math.random() < cfg.bushChance) addBush(x, z, 0.8 + Math.random() * 0.7, baseY, cfg.opts, M);
+            else addTree(x, z, 0.8 + Math.random() * 0.8, baseY, cfg.opts, M);
         });
     }
+
+    // Emit one mesh per material batch (4 draw calls instead of hundreds).
+    if (M.trunk.pos.length) scene.add(mergerMesh(M.trunk, new THREE.MeshLambertMaterial({ color: 0x7a5230, flatShading: true })));
+    if (M.leaf.pos.length) scene.add(mergerMesh(M.leaf, new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })));
+    if (M.cap.pos.length) scene.add(mergerMesh(M.cap, new THREE.MeshLambertMaterial({ color: 0xf5f9ff, flatShading: true })));
+    if (M.bush.pos.length) scene.add(mergerMesh(M.bush, new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })));
 }
 
 // Distant snow-capped mountains ringing the snowy track.
@@ -998,9 +1039,32 @@ function update() {
     updateHUD();
 }
 
+// The simulation runs at a fixed 60 Hz regardless of render frame rate, so
+// the car physics (tuned per-tick) feel identical whether the GPU is pushing
+// 30 or 120 fps. Without this, a 30fps device runs the sim half as often and
+// the cars crawl at half speed.
+const SIM_STEP = 1000 / 60;   // ms per physics tick
+const MAX_SUBSTEPS = 5;       // cap catch-up work after a stall
+let _lastFrame = performance.now();
+let _accum = 0;
+
 function animate() {
     requestAnimationFrame(animate);
-    update();
+
+    const now = performance.now();
+    let frameTime = now - _lastFrame;
+    _lastFrame = now;
+    if (frameTime > 250) frameTime = 250; // ignore big gaps (tab/app backgrounded)
+
+    _accum += frameTime;
+    let steps = 0;
+    while (_accum >= SIM_STEP && steps < MAX_SUBSTEPS) {
+        update();
+        _accum -= SIM_STEP;
+        steps++;
+    }
+    if (steps === MAX_SUBSTEPS) _accum = 0; // dropped frames: don't spiral
+
     renderer.render(scene, camera);
     updateFps();
 }
