@@ -542,8 +542,7 @@ html, body {
 #menuBtn {
     position: fixed;
     top: max(12px, env(safe-area-inset-top));
-    left: 50%;
-    transform: translateX(-50%);
+    right: max(14px, env(safe-area-inset-right));
     z-index: 200;
     height: 36px;
     padding: 0 14px;
@@ -559,55 +558,21 @@ html, body {
     cursor: pointer;
 }
 
-/* ---------- Fullscreen button ---------- */
-#fsBtn {
+/* ---------- Mini-map (top-right, below tracks button) ---------- */
+#minimap {
     position: fixed;
-    top: max(12px, env(safe-area-inset-top));
+    top: calc(max(12px, env(safe-area-inset-top)) + 46px);
     right: max(14px, env(safe-area-inset-right));
-    z-index: 200;
-    width: 44px;
-    height: 44px;
+    z-index: 110;
+    width: 130px;
+    height: 130px;
     border-radius: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.25);
-    background: rgba(8, 10, 14, 0.55);
-    color: #fff;
-    font-size: 22px;
-    line-height: 1;
-    pointer-events: all;
-    cursor: pointer;
-}
-
-#fsBtn.hidden { display: none; }
-
-/* ---------- Install / fullscreen tip ---------- */
-#fsTip {
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    z-index: 300;
-    max-width: 320px;
-    display: none;
-    padding: 16px 18px;
-    border-radius: 14px;
-    background: rgba(8, 10, 14, 0.92);
+    background: rgba(8, 10, 14, 0.42);
     border: 1px solid rgba(255, 255, 255, 0.18);
-    color: #fff;
-    font-size: 15px;
-    font-weight: 600;
-    line-height: 1.5;
-    text-align: center;
-    pointer-events: all;
-    cursor: pointer;
+    pointer-events: none;
 }
-
-#fsTip.show { display: block; }
-
-#fsTip .tip-x {
-    display: block;
-    margin-top: 8px;
-    font-size: 12px;
-    color: #9ad0ff;
+@media (max-height: 430px) {
+    #minimap { width: 104px; height: 104px; }
 }
 
 /* ---------- Rotate hint (small, non-blocking banner) ---------- */

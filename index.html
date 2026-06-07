@@ -41,6 +41,9 @@
         </div>
     </div>
 
+    <!-- Mini-map (top-right): course outline + racer positions -->
+    <canvas id="minimap"></canvas>
+
     <!-- Speedometer (bottom-center) -->
     <div id="speedo">
         <span id="speedValue">0</span>
@@ -57,17 +60,8 @@
         <div class="joystick-stick"></div>
     </div>
 
-    <!-- Track select / menu button (top-left of controls) -->
+    <!-- Track select / menu button (top-right) -->
     <button id="menuBtn" aria-label="Tracks">≡ TRACKS</button>
-
-    <!-- Fullscreen toggle (top-right) -->
-    <button id="fsBtn" aria-label="Fullscreen">⛶</button>
-
-    <!-- Install-to-home tip (iOS fullscreen) -->
-    <div id="fsTip">
-        For true fullscreen on iPhone: tap <b>Share</b> &#8593; then
-        <b>Add to Home Screen</b>, and open it from the icon. <span class="tip-x">(tap to hide)</span>
-    </div>
 
     <!-- Ability buttons (right) -->
     <div id="abilities">

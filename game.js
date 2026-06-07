@@ -86,7 +86,7 @@ const hud = {
 };
 
 // Patch / build number shown top-left. Bump this with each gameplay update.
-const VERSION = 'v1.9.0';
+const VERSION = 'v1.10.0';
 if (hud.build) hud.build.textContent = VERSION;
 
 // Live FPS, averaged over a short window so the readout is steady.
@@ -244,6 +244,7 @@ function buildScene() {
     buildRacers();
     placeRacersAtStart();
     updateJoystickCenter();
+    setupMinimap();
 }
 
 function buildWorld() {
@@ -1285,6 +1286,7 @@ function animate() {
     if (steps === MAX_SUBSTEPS) _accum = 0; // dropped frames: don't spiral
 
     renderer.render(scene, camera);
+    drawMinimap();
     updateFps();
 }
 
@@ -1313,6 +1315,91 @@ function updateHUD() {
     hud.boostFill.style.width = `${Math.round((player.boostTime / BOOST_FRAMES) * 100)}%`;
     if (hud.nitroFill) hud.nitroFill.style.height = `${Math.round(player.nitroCharge * 100)}%`;
     if (hud.nitroBtn) hud.nitroBtn.classList.toggle('ready', player.nitroCharge >= 1);
+}
+
+// ------------------------------------------------------------
+// Mini-map: top-down course outline + live racer positions
+// ------------------------------------------------------------
+const minimap = {
+    canvas: document.getElementById('minimap'),
+    ctx: null, pts: null, map: null, size: 130, dpr: 1
+};
+if (minimap.canvas) minimap.ctx = minimap.canvas.getContext('2d');
+
+// Recompute the world->canvas mapping and cache the track outline for the
+// current track. Called whenever a track is (re)built.
+function setupMinimap() {
+    const mm = minimap;
+    if (!mm.ctx || !centerPoints.length) return;
+    const cssSize = mm.canvas.clientWidth || 130;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    mm.size = cssSize;
+    mm.dpr = dpr;
+    mm.canvas.width = Math.round(cssSize * dpr);
+    mm.canvas.height = Math.round(cssSize * dpr);
+
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const p of centerPoints) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.z < minZ) minZ = p.z;
+        if (p.z > maxZ) maxZ = p.z;
+    }
+    const pad = 12;
+    const avail = cssSize - pad * 2;
+    const worldW = (maxX - minX) || 1, worldH = (maxZ - minZ) || 1;
+    const scale = avail / Math.max(worldW, worldH);
+    const ox = pad + (avail - worldW * scale) / 2;
+    const oy = pad + (avail - worldH * scale) / 2;
+    mm.map = (x, z) => ({ x: ox + (x - minX) * scale, y: oy + (z - minZ) * scale });
+    mm.pts = centerPoints.map(p => mm.map(p.x, p.z));
+}
+
+function drawMinimap() {
+    const mm = minimap;
+    if (!mm.ctx || !mm.pts) return;
+    const ctx = mm.ctx;
+    ctx.setTransform(mm.dpr, 0, 0, mm.dpr, 0, 0);
+    ctx.clearRect(0, 0, mm.size, mm.size);
+
+    // Course outline.
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+    ctx.beginPath();
+    mm.pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+    ctx.closePath();
+    ctx.stroke();
+
+    // Start/finish marker.
+    const s = mm.pts[0];
+    ctx.fillStyle = '#ffd166';
+    ctx.fillRect(s.x - 2.5, s.y - 2.5, 5, 5);
+
+    // Racers: AI as dots, the player as a heading arrow.
+    for (const r of racers) {
+        const p = mm.map(r.x, r.z);
+        const col = hexToCss(r.baseColor);
+        if (r.isPlayer) {
+            const dx = Math.sin(r.heading), dz = Math.cos(r.heading);
+            const nx = -dz, nz = dx;
+            ctx.beginPath();
+            ctx.moveTo(p.x + dx * 7, p.y + dz * 7);
+            ctx.lineTo(p.x - dx * 4 + nx * 4, p.y - dz * 4 + nz * 4);
+            ctx.lineTo(p.x - dx * 4 - nx * 4, p.y - dz * 4 - nz * 4);
+            ctx.closePath();
+            ctx.fillStyle = col;
+            ctx.fill();
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = '#fff';
+            ctx.stroke();
+        } else {
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 3.2, 0, Math.PI * 2);
+            ctx.fillStyle = col;
+            ctx.fill();
+        }
+    }
 }
 
 function showCenter(html, persist) {
@@ -1712,6 +1799,7 @@ function handleResize() {
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     updateJoystickCenter();
+    setupMinimap();
 }
 
 // ------------------------------------------------------------
