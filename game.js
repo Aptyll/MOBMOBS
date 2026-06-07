@@ -77,7 +77,9 @@ const hud = {
     time: document.getElementById('timeValue'),
     best: document.getElementById('bestValue'),
     speed: document.getElementById('speedValue'),
-    boostFill: document.getElementById('boostFill'),
+    speedBar: document.getElementById('speedBar'),
+    speedGrad: document.getElementById('speedGrad'),
+    speedStreak: document.getElementById('speedStreak'),
     nitroFill: document.getElementById('nitroFill'),
     nitroBtn: document.getElementById('nitroBtn'),
     center: document.getElementById('centerMessage'),
@@ -86,7 +88,7 @@ const hud = {
 };
 
 // Patch / build number shown top-left. Bump this with each gameplay update.
-const VERSION = 'v1.10.0';
+const VERSION = 'v1.11.0';
 if (hud.build) hud.build.textContent = VERSION;
 
 // Live FPS, averaged over a short window so the readout is steady.
@@ -1306,13 +1308,38 @@ function playerPosition() {
     return sorted.indexOf(player) + 1;
 }
 
+// Speed display tuning: maps internal speed units to a fast-feeling MPH, and
+// the bar fills toward boosted top speed so a boost visibly pegs it.
+const SPEED_MPH = 215;
+const SPEED_BAR_MAX = 1.6;
+
 function updateHUD() {
-    hud.pos.textContent = `${playerPosition()} / ${racers.length}`;
-    hud.lap.textContent = `${Math.min(player.lap, TOTAL_LAPS)} / ${TOTAL_LAPS}`;
+    hud.pos.textContent = `${playerPosition()}/${racers.length}`;
+    hud.lap.textContent = `${Math.min(player.lap, TOTAL_LAPS)}/${TOTAL_LAPS}`;
     hud.time.textContent = formatTime(race.elapsed);
     hud.best.textContent = formatTime(player.bestLap);
-    hud.speed.textContent = Math.round(Math.abs(player.speed) * 320);
-    hud.boostFill.style.width = `${Math.round((player.boostTime / BOOST_FRAMES) * 100)}%`;
+
+    const spd = Math.abs(player.speed);
+    hud.speed.textContent = Math.round(spd * SPEED_MPH);
+
+    // Energy speed bar: clip-path reveal (CSS-eased = smooth), glow/streak
+    // intensify with speed, and a boost turns the whole bar hot.
+    const frac = clamp(spd / SPEED_BAR_MAX, 0, 1);
+    if (hud.speedBar) {
+        const reveal = `inset(0 ${((1 - frac) * 100).toFixed(1)}% 0 0)`;
+        hud.speedGrad.style.clipPath = reveal;
+        hud.speedStreak.style.clipPath = reveal;
+        hud.speedBar.style.setProperty('--i', frac.toFixed(3));
+        hud.speedStreak.style.opacity = (frac * 0.6).toFixed(2);
+        // Faster scroll as you speed up (only update on meaningful change).
+        const dur = (1.05 - 0.82 * frac);
+        if (Math.abs((hud._streakDur || 0) - dur) > 0.04) {
+            hud.speedStreak.style.animationDuration = dur.toFixed(2) + 's';
+            hud._streakDur = dur;
+        }
+        hud.speedBar.classList.toggle('boosting', player.boostTime > 0);
+    }
+
     if (hud.nitroFill) hud.nitroFill.style.height = `${Math.round(player.nitroCharge * 100)}%`;
     if (hud.nitroBtn) hud.nitroBtn.classList.toggle('ready', player.nitroCharge >= 1);
 }

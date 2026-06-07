@@ -21,35 +21,36 @@
         <span class="ti-build" id="buildValue">v0.0.0</span>
     </div>
 
-    <!-- Heads-up display -->
-    <div id="hud">
-        <div class="hud-row">
-            <span class="hud-label">POS</span>
-            <span id="posValue">1 / 4</span>
+    <!-- Top speed HUD (Asphalt-style): speed bar + big MPH, POS left, LAP right -->
+    <div id="speedHud">
+        <div class="sh-bar" id="speedBar">
+            <div class="sh-bar-grad" id="speedGrad"></div>
+            <div class="sh-bar-streak" id="speedStreak"></div>
         </div>
-        <div class="hud-row">
-            <span class="hud-label">LAP</span>
-            <span id="lapValue">1 / 3</span>
+        <div class="sh-main">
+            <div class="sh-side">
+                <span class="sh-side-label">POS</span>
+                <span class="sh-side-val" id="posValue">1/4</span>
+            </div>
+            <div class="sh-speed">
+                <span class="sh-mph" id="speedValue">0</span>
+                <span class="sh-unit">MPH</span>
+            </div>
+            <div class="sh-side sh-side-right">
+                <span class="sh-side-label">LAP</span>
+                <span class="sh-side-val" id="lapValue">1/3</span>
+            </div>
         </div>
-        <div class="hud-row">
-            <span class="hud-label">TIME</span>
-            <span id="timeValue">0:00.00</span>
-        </div>
-        <div class="hud-row">
-            <span class="hud-label">BEST</span>
-            <span id="bestValue">--:--.--</span>
-        </div>
+    </div>
+
+    <!-- Race timing (top-left, subtle) -->
+    <div id="raceInfo">
+        <div class="ri-row"><span class="ri-label">TIME</span><span id="timeValue">0:00.00</span></div>
+        <div class="ri-row"><span class="ri-label">BEST</span><span id="bestValue">--:--.--</span></div>
     </div>
 
     <!-- Mini-map (top-right): course outline + racer positions -->
     <canvas id="minimap"></canvas>
-
-    <!-- Speedometer (bottom-center) -->
-    <div id="speedo">
-        <span id="speedValue">0</span>
-        <span class="hud-unit">KM/H</span>
-        <div id="boostBar"><div id="boostFill"></div></div>
-    </div>
 
     <!-- Center messages (countdown / boost / finish) -->
     <div id="centerMessage"></div>

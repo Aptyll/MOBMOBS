@@ -57,84 +57,121 @@ html, body {
     opacity: 0.8;
 }
 
-#hud {
+/* ---------- Top speed HUD (Asphalt-style) ---------- */
+#speedHud {
     position: fixed;
-    top: calc(max(14px, env(safe-area-inset-top)) + 22px);
-    left: max(16px, env(safe-area-inset-left));
-    z-index: 100;
-    color: #fff;
-    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.8);
+    top: max(10px, env(safe-area-inset-top));
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 120;
+    width: min(640px, 70vw);
     pointer-events: none;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.85);
 }
 
-.hud-row {
+/* Energy speed bar */
+.sh-bar {
+    position: relative;
+    height: 9px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.13);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16),
+                0 0 calc(3px + 16px * var(--i, 0)) rgba(255, 170, 50, calc(0.12 + 0.5 * var(--i, 0)));
+    overflow: hidden;
+    transition: box-shadow 0.15s ease;
+}
+.sh-bar-grad {
+    position: absolute;
+    inset: 0;
+    border-radius: 6px;
+    background: linear-gradient(90deg, #19e0ff 0%, #4dff91 38%, #ffe14d 68%, #ff6a1a 100%);
+    clip-path: inset(0 100% 0 0);
+    transition: clip-path 0.12s linear, filter 0.15s ease;
+    filter: saturate(calc(1 + 0.6 * var(--i, 0))) brightness(calc(1 + 0.25 * var(--i, 0)));
+}
+.sh-bar-streak {
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(110deg,
+        rgba(255, 255, 255, 0) 0 12px, rgba(255, 255, 255, 0.22) 12px 18px);
+    background-size: 36px 100%;
+    clip-path: inset(0 100% 0 0);
+    transition: clip-path 0.12s linear;
+    opacity: 0;
+    animation: shStreak 0.9s linear infinite;
+}
+@keyframes shStreak { to { background-position: 36px 0; } }
+
+/* When a boost is firing, push the bar hot. */
+.sh-bar.boosting {
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3),
+                0 0 22px rgba(255, 120, 30, 0.85);
+}
+.sh-bar.boosting .sh-bar-grad { filter: saturate(1.7) brightness(1.35); }
+
+/* Speed + side readouts row */
+.sh-main {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    margin-top: 6px;
+}
+.sh-speed {
     display: flex;
     align-items: baseline;
-    gap: 8px;
-    margin-bottom: 3px;
+    gap: 5px;
+    line-height: 0.9;
 }
-
-.hud-label {
-    font-size: 11px;
-    letter-spacing: 2px;
-    color: #9ad0ff;
-    min-width: 40px;
-}
-
-#posValue, #lapValue, #timeValue, #bestValue {
-    font-size: 17px;
-    font-weight: 700;
+.sh-mph {
+    font-size: clamp(40px, 9vw, 72px);
+    font-weight: 900;
+    font-style: italic;
+    letter-spacing: -1px;
+    color: #fff;
     font-variant-numeric: tabular-nums;
 }
-
-#posValue {
-    font-size: 22px;
+.sh-unit {
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: 2px;
     color: #ffd166;
 }
 
-/* ---------- Speedometer ---------- */
-#speedo {
-    position: fixed;
-    bottom: max(18px, env(safe-area-inset-bottom));
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 100;
-    color: #fff;
-    text-align: center;
-    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.8);
-    pointer-events: none;
+.sh-side {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    min-width: 56px;
+    padding-bottom: 6px;
 }
-
-#speedValue {
-    font-size: 44px;
+.sh-side-right { align-items: flex-end; }
+.sh-side-label {
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: #9ad0ff;
+}
+.sh-side-val {
+    font-size: clamp(20px, 4.5vw, 30px);
     font-weight: 800;
     color: #ffd166;
     font-variant-numeric: tabular-nums;
     line-height: 1;
 }
 
-.hud-unit {
-    font-size: 12px;
-    letter-spacing: 2px;
-    color: #ffd166;
-    margin-left: 4px;
+/* ---------- Race timing (top-left) ---------- */
+#raceInfo {
+    position: fixed;
+    top: calc(max(12px, env(safe-area-inset-top)) + 22px);
+    left: max(16px, env(safe-area-inset-left));
+    z-index: 100;
+    color: #fff;
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.8);
+    pointer-events: none;
+    font-variant-numeric: tabular-nums;
 }
-
-#boostBar {
-    width: 120px;
-    height: 7px;
-    margin: 6px auto 0;
-    border-radius: 4px;
-    background: rgba(255, 255, 255, 0.2);
-    overflow: hidden;
-}
-
-#boostFill {
-    height: 100%;
-    width: 0%;
-    background: linear-gradient(90deg, #00e5ff, #18ffb0);
-    transition: width 0.08s linear;
-}
+.ri-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; }
+.ri-label { font-size: 10px; letter-spacing: 2px; color: #9ad0ff; min-width: 32px; }
+.ri-row span:last-child { font-size: 14px; font-weight: 700; }
 
 /* ---------- Center message ---------- */
 #centerMessage {
