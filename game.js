@@ -80,8 +80,28 @@ const hud = {
     boostFill: document.getElementById('boostFill'),
     nitroFill: document.getElementById('nitroFill'),
     nitroBtn: document.getElementById('nitroBtn'),
-    center: document.getElementById('centerMessage')
+    center: document.getElementById('centerMessage'),
+    fps: document.getElementById('fpsValue'),
+    build: document.getElementById('buildValue')
 };
+
+// Patch / build number shown top-left. Bump this with each gameplay update.
+const VERSION = 'v1.3.0';
+if (hud.build) hud.build.textContent = VERSION;
+
+// Live FPS, averaged over a short window so the readout is steady.
+const fpsState = { last: performance.now(), frames: 0, acc: 0 };
+function updateFps() {
+    const now = performance.now();
+    fpsState.acc += now - fpsState.last;
+    fpsState.last = now;
+    fpsState.frames++;
+    if (fpsState.acc >= 500) {
+        if (hud.fps) hud.fps.textContent = Math.round((fpsState.frames * 1000) / fpsState.acc);
+        fpsState.frames = 0;
+        fpsState.acc = 0;
+    }
+}
 
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
@@ -982,6 +1002,7 @@ function animate() {
     requestAnimationFrame(animate);
     update();
     renderer.render(scene, camera);
+    updateFps();
 }
 
 // ------------------------------------------------------------

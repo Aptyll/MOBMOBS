@@ -31,9 +31,35 @@ html, body {
 }
 
 /* ---------- HUD ---------- */
+#topInfo {
+    position: fixed;
+    top: max(12px, env(safe-area-inset-top));
+    left: max(16px, env(safe-area-inset-left));
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 11px;
+    letter-spacing: 1px;
+    color: rgba(255, 255, 255, 0.85);
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.8);
+    pointer-events: none;
+    font-variant-numeric: tabular-nums;
+}
+
+#topInfo .ti-fps b {
+    color: #6ee06e;
+    font-size: 13px;
+}
+
+#topInfo .ti-build {
+    color: #9ad0ff;
+    opacity: 0.8;
+}
+
 #hud {
     position: fixed;
-    top: max(14px, env(safe-area-inset-top));
+    top: calc(max(14px, env(safe-area-inset-top)) + 22px);
     left: max(16px, env(safe-area-inset-left));
     z-index: 100;
     color: #fff;
