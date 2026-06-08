@@ -259,7 +259,7 @@ html, body {
 
 .joystick.active .joystick-stick { transition: none; }
 
-/* ---------- Ability buttons (nitro, etc.) ---------- */
+/* ---------- Ability buttons (boost, etc.) ---------- */
 #abilities {
     position: fixed;
     bottom: max(26px, env(safe-area-inset-bottom));
@@ -290,7 +290,7 @@ html, body {
 }
 
 /* charge fill rises from the bottom of the round button */
-#nitroFill {
+#boostFill {
     position: absolute;
     left: 0;
     bottom: 0;

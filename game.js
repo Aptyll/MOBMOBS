@@ -1,20 +1,20 @@
 // ============================================================
 // MOBMOBS - Track Racing
 // Landscape circuit racer with multiple themed tracks, boosts,
-// jumps, manual nitro and AI opponents.
+// jumps, manual boost and AI opponents.
 //
 // Controls:
 //   Steer + throttle - left joystick. Push left/right to steer,
 //                      push forward (up) to accelerate. The car
 //                      rolls at a base speed and scales up with
 //                      how far the stick is pushed.
-//   Nitro            - round button on the right (or SPACE).
-//                      Fires a manual boost when charged.
+//   Boost            - round button on the right (or SPACE).
+//                      Fires at any time; recharges over ~7 s.
 //   (Keyboard: A/D or arrows steer, W/S or up/down throttle.)
-//   (Gamepad: left stick steers + throttles, A button fires nitro.)
+//   (Gamepad: left stick steers + throttles, A button fires boost.)
 //
 // Drive over the cyan boost pads for a free speed surge and a
-// nitro top-up. 3 laps, 4 cars, collisions on.
+// boost charge top-up. 3 laps, 4 cars, collisions on.
 // ============================================================
 
 // Three.js scene objects
@@ -54,12 +54,9 @@ const BASE_FOV = 68, MAX_FOV = 71;
 
 // Boost pads
 let boostPads = [];      // { x, z, mesh }
-const BOOST_FRAMES = 90; // duration of a pad boost
-const BOOST_RADIUS = 5;  // pickup distance
-
-// Nitro (manual boost)
-const NITRO_FRAMES = 100;            // duration of a nitro boost
-const NITRO_REGEN = 1 / (60 * 7);    // full charge in ~7 seconds
+const BOOST_FRAMES = 100; // duration of a boost (pad or manual)
+const BOOST_RADIUS = 5;   // pickup distance
+const BOOST_REGEN = 1 / (60 * 7);    // full charge in ~7 seconds
 
 // Ramps (jumps)
 let ramps = [];          // { x, z, tx, tz, rx, rz, L, H, halfW, baseY }
@@ -71,8 +68,8 @@ let player = null;
 const AI_COLORS = [0x3498db, 0x2ecc71, 0xf1c40f, 0x9b59b6, 0xe67e22];
 const CAR_RADIUS = 1.9;  // collision radius
 
-// Control input (player): steer/throttle in [-1,1], nitro is momentary
-const input = { steer: 0, throttle: 0, nitro: false };
+// Control input (player): steer/throttle in [-1,1], boost is momentary
+const input = { steer: 0, throttle: 0, boost: false };
 
 // Race state
 const race = {
@@ -102,8 +99,8 @@ const hud = {
     speedBar: document.getElementById('speedBar'),
     speedGrad: document.getElementById('speedGrad'),
     speedStreak: document.getElementById('speedStreak'),
-    nitroFill: document.getElementById('nitroFill'),
-    nitroBtn: document.getElementById('nitroBtn'),
+    boostFill: document.getElementById('boostFill'),
+    boostBtn: document.getElementById('boostBtn'),
     center: document.getElementById('centerMessage'),
     fps: document.getElementById('fpsValue'),
     build: document.getElementById('buildValue')
@@ -568,7 +565,7 @@ function buildRamps() {
         const angle = Math.atan2(t.x, t.z);
 
         const geo = buildRampMesh(L, H, W);
-        const yellow = new THREE.MeshLambertMaterial({ color: 0xf4c542, flatShading: true });
+        const yellow = new THREE.MeshPhongMaterial({ color: 0xf4c542, flatShading: true });
         const mesh = new THREE.Mesh(geo, yellow);
         mesh.castShadow = true;
         mesh.receiveShadow = true;
@@ -717,10 +714,10 @@ function buildFoliage() {
     }
 
     // Emit one mesh per material batch (4 draw calls instead of hundreds).
-    if (M.trunk.pos.length) scene.add(mergerMesh(M.trunk, new THREE.MeshLambertMaterial({ color: 0x7a5230, flatShading: true })));
-    if (M.leaf.pos.length) scene.add(mergerMesh(M.leaf, new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })));
-    if (M.cap.pos.length) scene.add(mergerMesh(M.cap, new THREE.MeshLambertMaterial({ color: 0xf5f9ff, flatShading: true })));
-    if (M.bush.pos.length) scene.add(mergerMesh(M.bush, new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })));
+    if (M.trunk.pos.length) scene.add(mergerMesh(M.trunk, new THREE.MeshPhongMaterial({ color: 0x7a5230, flatShading: true })));
+    if (M.leaf.pos.length) scene.add(mergerMesh(M.leaf, new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true })));
+    if (M.cap.pos.length) scene.add(mergerMesh(M.cap, new THREE.MeshPhongMaterial({ color: 0xf5f9ff, flatShading: true })));
+    if (M.bush.pos.length) scene.add(mergerMesh(M.bush, new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true })));
 }
 
 // Distant snow-capped mountains ringing the snowy track.
@@ -931,7 +928,7 @@ function makeRacer(opts) {
         lap: 1, progress: 0, lastProgress: 0, lastIndex: 0,
         finished: false, finishTime: null, finishOrder: 0,
         boostTime: 0,
-        nitroCharge: 0,
+        boostCharge: 0,
         bestLap: null, lapStartTime: 0,
         // physics tuning (velocity-vector model = momentum + drift)
         accel: 0.013, brakePower: 0.024, reverseAccel: 0.008,
@@ -986,7 +983,7 @@ function placeRacersAtStart() {
         r.y = trackHeightAt(r);
         r.lap = 1; r.progress = 0; r.lastProgress = 0;
         r.finished = false; r.finishTime = null;
-        r.boostTime = 0; r.nitroCharge = 0; r.bestLap = null;
+        r.boostTime = 0; r.boostCharge = 0; r.bestLap = null;
         r.mesh.position.set(r.x, r.y, r.z);
         r.mesh.rotation.set(0, heading, 0);
     });
@@ -1061,10 +1058,10 @@ function stepRacer(r, ctrl) {
             r.vx -= fX * f * b; r.vz -= fZ * f * b;
         }
 
-        // Manual nitro: fire when charged and not already boosting.
-        if (ctrl.nitro && r.nitroCharge >= 1 && r.boostTime <= 0) {
-            r.boostTime = NITRO_FRAMES;
-            r.nitroCharge = 0;
+        // Boost: fire at any time, resets charge.
+        if (ctrl.boost && r.boostTime <= 0) {
+            r.boostTime = BOOST_FRAMES;
+            r.boostCharge = 0;
         }
 
         if (r.boostTime > 0) {
@@ -1079,9 +1076,9 @@ function stepRacer(r, ctrl) {
         r.vx *= 0.92; r.vz *= 0.92;
     }
 
-    // Recharge nitro over time while racing.
+    // Recharge boost over time while racing.
     if (race.started && !r.finished) {
-        r.nitroCharge = Math.min(1, r.nitroCharge + NITRO_REGEN);
+        r.boostCharge = Math.min(1, r.boostCharge + BOOST_REGEN);
     }
 
     // Grip: keep forward velocity, bleed off sideways velocity.
@@ -1092,13 +1089,10 @@ function stepRacer(r, ctrl) {
     r.vx = f2X * fwd + latX * grip;
     r.vz = f2Z * fwd + latZ * grip;
 
-    // Drag + top-speed clamp (top speed scales with throttle).
+    // Drag (no hard top-speed cap — drag forms a natural terminal velocity).
     const drag = r.airborne ? 0.999 : (r.offTrack ? r.offTrackDrag : r.drag);
     r.vx *= drag; r.vz *= drag;
     speed = Math.hypot(r.vx, r.vz);
-    let topSpeed = (r.offTrack ? r.offTrackMaxSpeed : r.maxSpeed) * drive;
-    if (r.boostTime > 0) topSpeed = Math.max(topSpeed, 1.55);
-    if (speed > topSpeed) { r.vx *= topSpeed / speed; r.vz *= topSpeed / speed; }
     if (speed < 0.0008) { r.vx = 0; r.vz = 0; }
 
     // Integrate horizontal position.
@@ -1137,13 +1131,13 @@ function stepRacer(r, ctrl) {
 function applyTransform(r, ctrlSteer) {
     r.mesh.position.set(r.x, r.y, r.z);
     r.mesh.rotation.y = r.heading;
-    const roll = -ctrlSteer * Math.min(Math.abs(r.speed) / r.maxSpeed, 1) * 0.12;
+    const roll = -ctrlSteer * Math.min(Math.abs(r.speed) / 0.95, 1) * 0.12;
     r.mesh.rotation.z = roll;
     r.mesh.rotation.x = (r.airborne) ? clamp(-r.vy * 1.2, -0.5, 0.5) : 0;
 
     // Wheels: roll proportional to forward speed; front wheels steer.
     r._wheelSpin = (r._wheelSpin || 0) + r.speed / WHEEL_RADIUS;
-    const steerAngle = clamp(ctrlSteer, -1, 1) * 0.5;
+    const steerAngle = clamp(ctrlSteer, -1, 1) * -0.5;
     const wheels = r.mesh._wheels;
     if (wheels) {
         for (let i = 0; i < wheels.length; i++) {
@@ -1162,7 +1156,7 @@ function applyTransform(r, ctrlSteer) {
     }
 }
 
-// Light the roof reactor strip to match the car's nitro state:
+// Light the roof reactor strip to match the car's boost state:
 //   charging  -> cyan segments fill from the front as charge rises
 //   ready      -> all segments shimmer toward white
 //   boosting   -> whole strip surges orange and pulses
@@ -1170,7 +1164,7 @@ function updateBoostReactor(r) {
     const segs = r.mesh._boostSegs;
     if (!segs) return;
     const n = segs.length;
-    const charge = clamp(r.nitroCharge, 0, 1);
+    const charge = clamp(r.boostCharge, 0, 1);
     const lit = Math.round(charge * n);
     const boosting = r.boostTime > 0;
     const ready = charge >= 0.999;
@@ -1195,7 +1189,7 @@ function updateBoostReactor(r) {
 }
 
 // AI controller: steer toward a look-ahead point, ease off in corners,
-// and pop nitro on the straights.
+// and pop boost on the straights.
 function aiControl(r) {
     const targetIdx = (r.lastIndex + r.lookahead) % SAMPLES;
     const target = centerPoints[targetIdx];
@@ -1207,13 +1201,13 @@ function aiControl(r) {
     const sharp = Math.abs(diff);
     const targetSpeed = r.maxSpeed * r.skill * (1 - Math.min(sharp * 1.4, 0.55));
 
-    const ctrl = { steer: 0, throttle: 0, nitro: false };
+    const ctrl = { steer: 0, throttle: 0, boost: false };
     if (r.speed < targetSpeed - 0.02) ctrl.throttle = 1;
     else if (r.speed > targetSpeed + 0.12) ctrl.throttle = -0.7;
     else ctrl.throttle = 0.35;
 
-    // Use nitro when charged and pointing down a straight.
-    if (r.nitroCharge >= 1 && sharp < 0.12) ctrl.nitro = true;
+    // Use boost when charged and pointing down a straight.
+    if (r.boostCharge >= 1 && sharp < 0.12) ctrl.boost = true;
 
     const speedFactor = Math.min(Math.abs(r.speed) / 0.25, 1) || 1;
     ctrl.steer = clamp(-diff / (r.turnRate * speedFactor), -1, 1);
@@ -1228,7 +1222,7 @@ function checkBoosts(r) {
         const dd = (pad.x - r.x) ** 2 + (pad.z - r.z) ** 2;
         if (dd < BOOST_RADIUS * BOOST_RADIUS) {
             if (r.boostTime < BOOST_FRAMES - 20) r.boostTime = BOOST_FRAMES;
-            r.nitroCharge = Math.min(1, r.nitroCharge + 0.5); // pads top up nitro
+            r.boostCharge = Math.min(1, r.boostCharge + 0.5); // pads top up boost charge
         }
     }
 }
@@ -1302,15 +1296,15 @@ function update() {
     racers.forEach(r => {
         let ctrl;
         if (r.isPlayer) {
-            ctrl = { steer: input.steer, throttle: input.throttle, nitro: input.nitro };
+            ctrl = { steer: input.steer, throttle: input.throttle, boost: input.boost };
         } else {
-            ctrl = race.started ? aiControl(r) : { steer: 0, throttle: 0, nitro: false };
+            ctrl = race.started ? aiControl(r) : { steer: 0, throttle: 0, boost: false };
         }
         r._lastSteer = ctrl.steer;
         stepRacer(r, ctrl);
     });
 
-    input.nitro = false; // momentary: consumed each frame
+    input.boost = false; // momentary: consumed each frame
 
     handleCollisions();
 
@@ -1417,8 +1411,8 @@ function updateHUD() {
         hud.speedBar.classList.toggle('boosting', player.boostTime > 0);
     }
 
-    if (hud.nitroFill) hud.nitroFill.style.height = `${Math.round(player.nitroCharge * 100)}%`;
-    if (hud.nitroBtn) hud.nitroBtn.classList.toggle('ready', player.nitroCharge >= 1);
+    if (hud.boostFill) hud.boostFill.style.height = `${Math.round(player.boostCharge * 100)}%`;
+    if (hud.boostBtn) hud.boostBtn.classList.toggle('ready', player.boostCharge >= 1);
 }
 
 // ------------------------------------------------------------
@@ -2069,14 +2063,14 @@ document.addEventListener('pointercancel', (e) => {
 // ------------------------------------------------------------
 // Nitro button
 // ------------------------------------------------------------
-const nitroBtnEl = document.getElementById('nitroBtn');
-if (nitroBtnEl) {
-    const fire = (e) => { e.preventDefault(); e.stopPropagation(); input.nitro = true; nitroBtnEl.classList.add('pressed'); };
-    const release = (e) => { e.preventDefault(); nitroBtnEl.classList.remove('pressed'); };
-    nitroBtnEl.addEventListener('pointerdown', fire);
-    nitroBtnEl.addEventListener('pointerup', release);
-    nitroBtnEl.addEventListener('pointerleave', release);
-    nitroBtnEl.addEventListener('pointercancel', release);
+const boostBtnEl = document.getElementById('boostBtn');
+if (boostBtnEl) {
+    const fire = (e) => { e.preventDefault(); e.stopPropagation(); input.boost = true; boostBtnEl.classList.add('pressed'); };
+    const release = (e) => { e.preventDefault(); boostBtnEl.classList.remove('pressed'); };
+    boostBtnEl.addEventListener('pointerdown', fire);
+    boostBtnEl.addEventListener('pointerup', release);
+    boostBtnEl.addEventListener('pointerleave', release);
+    boostBtnEl.addEventListener('pointercancel', release);
 }
 
 // ------------------------------------------------------------
@@ -2108,7 +2102,7 @@ const keyMap = {
     'a': 'left', 'arrowleft': 'left', 'd': 'right', 'arrowright': 'right'
 };
 document.addEventListener('keydown', (e) => {
-    if (e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); input.nitro = true; return; }
+    if (e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); input.boost = true; return; }
     const k = keyMap[e.key.toLowerCase()];
     if (k) { e.preventDefault(); keys[k] = true; }
 });
@@ -2120,9 +2114,9 @@ document.addEventListener('keyup', (e) => {
 // ------------------------------------------------------------
 // Gamepad (Nintendo Switch Pro Controller, Xbox, etc.)
 // Left stick steers (and throttles: push up to accelerate, down to
-// brake/reverse). The A button fires nitro.
+// brake/reverse). The A button fires boost.
 // ------------------------------------------------------------
-const gamepad = { index: null, nitroLatch: false };
+const gamepad = { index: null, boostLatch: false };
 const GP_DEADZONE = 0.18;
 
 window.addEventListener('gamepadconnected', (e) => { gamepad.index = e.gamepad.index; });
@@ -2151,8 +2145,8 @@ function pollGamepad() {
     // A button = boost. On the Switch Pro Controller's standard mapping the
     // physical A button (right face position) is button index 1.
     const aBtn = !!(gp.buttons[1] && gp.buttons[1].pressed);
-    if (aBtn && !gamepad.nitroLatch) input.nitro = true; // edge-triggered (one fire per press)
-    gamepad.nitroLatch = aBtn;
+    if (aBtn && !gamepad.boostLatch) input.boost = true; // edge-triggered (one fire per press)
+    gamepad.boostLatch = aBtn;
 
     if (steer === 0 && throttle === 0) return; // let keyboard/idle stand
     input.steer = clamp(steer, -1, 1);
