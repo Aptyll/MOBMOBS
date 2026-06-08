@@ -1412,7 +1412,13 @@ function updateHUD() {
     }
 
     if (hud.boostFill) hud.boostFill.style.height = `${Math.round(player.boostCharge * 100)}%`;
-    if (hud.boostBtn) hud.boostBtn.classList.toggle('ready', player.boostCharge >= 1);
+    if (hud.boostBtn) {
+        // Drive the rim ring (0..1) so it sweeps smoothly as boost recharges.
+        hud.boostBtn.style.setProperty('--charge', player.boostCharge.toFixed(3));
+        const firing = player.boostTime > 0;
+        hud.boostBtn.classList.toggle('firing', firing);
+        hud.boostBtn.classList.toggle('ready', !firing && player.boostCharge >= 1);
+    }
 }
 
 // ------------------------------------------------------------

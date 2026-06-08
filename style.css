@@ -301,19 +301,63 @@ html, body {
     transition: height 0.12s linear;
 }
 
-.ability-label {
+/* Charge ring: a conic sweep around the rim that tracks recharge (0..1 in
+   --charge). Reads as a precise "how full is my boost" gauge on the round
+   button — the universal game charge/cooldown affordance. Masked to a thin
+   ring so it hugs the rim and never covers the icon. */
+.ability-boost::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: conic-gradient(from -90deg,
+        #ff8a4d calc(var(--charge, 0) * 360deg),
+        rgba(255, 255, 255, 0.1) 0);
+    -webkit-mask: radial-gradient(farthest-side,
+        transparent calc(100% - 7px), #000 calc(100% - 6px));
+    mask: radial-gradient(farthest-side,
+        transparent calc(100% - 7px), #000 calc(100% - 6px));
+    z-index: 2;
+    pointer-events: none;
+}
+
+/* Boost icon (lightning bolt): no text to read — instantly "power/boost". */
+.ability-icon {
     position: relative;
     z-index: 1;
-    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.85);
+    width: 38px;
+    height: 38px;
+    fill: #fff;
+    filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.85));
+    transition: transform 0.05s ease;
 }
 
 .ability.pressed { transform: scale(0.92); filter: brightness(1.25); }
 
-/* glow when the ability is charged and ready to fire */
+/* Charged and ready to fire: the ring completes to gold, the rim glows, and
+   the whole button gives a gentle pulse so the payoff moment is unmissable. */
 .ability.ready {
     border-color: #ffd166;
     box-shadow: 0 0 18px rgba(255, 140, 60, 0.85);
+    animation: abilityReady 1.1s ease-in-out infinite;
 }
+.ability.ready::after {
+    background: conic-gradient(#ffd166 360deg);
+}
+.ability.ready .ability-icon { fill: #fff3d6; }
+
+@keyframes abilityReady {
+    0%, 100% { box-shadow: 0 0 14px rgba(255, 140, 60, 0.55); }
+    50%      { box-shadow: 0 0 26px rgba(255, 200, 90, 0.95); }
+}
+
+/* Firing: confirm activation while the boost is actually surging. */
+.ability.firing {
+    border-color: #fff;
+    box-shadow: 0 0 30px rgba(255, 120, 30, 1);
+    animation: none;
+}
+.ability.firing .ability-icon { transform: scale(1.18); fill: #fff; }
 
 /* ---------- Track-select menu ---------- */
 .menu {
