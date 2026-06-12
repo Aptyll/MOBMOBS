@@ -10,6 +10,9 @@
 //                      how far the stick is pushed.
 //   Boost            - round button on the right (or SPACE).
 //                      Fires at any time; recharges over ~7 s.
+//   Tilt steering    - optional (Settings > Steering > Tilt): tilt
+//                      the device like a wheel to steer; the stick
+//                      then only handles throttle.
 //   (Keyboard: A/D or arrows steer, W/S or up/down throttle.)
 //   (Gamepad: left stick steers + throttles, A button fires boost.)
 //
@@ -107,7 +110,7 @@ const hud = {
 };
 
 // Patch / build number shown top-left. Bump this with each gameplay update.
-const VERSION = 'v1.12.0';
+const VERSION = 'v1.13.0';
 if (hud.build) hud.build.textContent = VERSION;
 
 // Live FPS, averaged over a short window so the readout is steady.
@@ -1688,6 +1691,7 @@ function positionCamera(snap) {
 function update() {
     pollKeyboard();
     pollGamepad();
+    pollTilt();
 
     racers.forEach(r => {
         let ctrl;
@@ -2105,6 +2109,7 @@ const DEFAULT_PROFILE = {
     showDebugInfo: false,
     showMinimap: true,
     cameraMode: 'normal',
+    controlScheme: 'joystick',   // 'joystick' | 'tilt'
     totalLaps: 3
 };
 const BODY_COLORS = [
@@ -2368,6 +2373,8 @@ function buildSegControl(containerId, values, labels, profileKey, onChange) {
 
 function buildSettingsPanel() {
     buildSegControl('cameraControl', ['close', 'normal', 'far'], ['Close', 'Normal', 'Far'], 'cameraMode', null);
+    buildSegControl('steeringControl', ['joystick', 'tilt'], ['Joystick', 'Tilt'], 'controlScheme',
+        () => applyControlScheme(true));
     buildSegControl('lapsControl', [1, 3, 5], ['1', '3', '5'], 'totalLaps', () => { TOTAL_LAPS = profile.totalLaps || 3; });
     applySettings();
 }
@@ -2422,6 +2429,14 @@ function updateJoystickCenter() {
 function setJoystickFromPoint(clientX, clientY) {
     const dx = clientX - joystick.centerX;
     const dy = clientY - joystick.centerY;
+    if (tiltSteerActive()) {
+        // Tilt mode: the stick only drives throttle; X mirrors the tilt.
+        const oy = clamp(dy, -joystick.radius, joystick.radius);
+        const ox = clamp(tilt.steer, -1, 1) * joystick.radius;
+        joystick.stick.style.transform = `translate(calc(-50% + ${ox.toFixed(1)}px), calc(-50% + ${oy}px))`;
+        input.throttle = clamp(-oy / joystick.radius, -1, 1); // up = forward
+        return;
+    }
     const dist = Math.hypot(dx, dy);
     const clamped = Math.min(dist, joystick.radius);
     const angle = Math.atan2(dy, dx);
@@ -2557,6 +2572,111 @@ function pollGamepad() {
     joystick.element.classList.add('active');
     joystick.stick.style.transform =
         `translate(calc(-50% + ${input.steer * joystick.radius}px), calc(-50% + ${-input.throttle * joystick.radius}px))`;
+}
+
+// ------------------------------------------------------------
+// Tilt steering (Settings > Steering > Tilt)
+// Steer by physically tilting the device like a steering wheel.
+// The joystick then only handles throttle (steering input from it
+// is ignored); the stick mirrors the tilt for visual feedback.
+// ------------------------------------------------------------
+const TILT_DEADZONE = 2;   // degrees of tilt ignored around level
+const TILT_MAX = 18;       // degrees of tilt for full steering lock
+const tilt = {
+    listening: false,      // deviceorientation listener attached
+    hasData: false,        // at least one real reading received
+    pendingGesture: false, // iOS: waiting for a tap to request permission
+    steer: 0               // latest steering value in [-1, 1]
+};
+
+function tiltSteerActive() { return tilt.listening && tilt.hasData; }
+
+// Map the device's tilt to a steer value, picking the axis that matches the
+// current screen orientation. Angles (beta/gamma) are reported in the
+// device's natural (portrait) frame, so in landscape the "steering wheel"
+// axis is beta; in portrait it is gamma.
+function onDeviceTilt(e) {
+    if (e.beta === null || e.gamma === null) return;
+    tilt.hasData = true;
+    let angle = 0;
+    if (screen.orientation && typeof screen.orientation.angle === 'number') {
+        angle = screen.orientation.angle;
+    } else if (typeof window.orientation === 'number') {
+        angle = (window.orientation + 360) % 360;
+    }
+    let deg;
+    switch (angle) {
+        case 90:  deg = e.beta;   break; // landscape, rotated counter-clockwise
+        case 270: deg = -e.beta;  break; // landscape, rotated clockwise
+        case 180: deg = -e.gamma; break; // portrait, upside down
+        default:  deg = e.gamma;         // portrait
+    }
+    const mag = Math.max(0, Math.abs(deg) - TILT_DEADZONE) / (TILT_MAX - TILT_DEADZONE);
+    tilt.steer = clamp(Math.sign(deg) * mag, -1, 1);
+}
+
+function startTiltListening() {
+    if (tilt.listening) return;
+    tilt.listening = true;
+    window.addEventListener('deviceorientation', onDeviceTilt);
+}
+
+function disableTilt() {
+    if (!tilt.listening) return;
+    tilt.listening = false;
+    tilt.hasData = false;
+    tilt.steer = 0;
+    window.removeEventListener('deviceorientation', onDeviceTilt);
+}
+
+function revertToJoystick() {
+    profile.controlScheme = 'joystick';
+    saveProfile();
+    disableTilt();
+    buildSegControl('steeringControl', ['joystick', 'tilt'], ['Joystick', 'Tilt'], 'controlScheme',
+        () => applyControlScheme(true));
+}
+
+function enableTilt(fromGesture) {
+    if (tilt.listening) return;
+    // iOS 13+ gates orientation events behind a permission prompt that can
+    // only be triggered from a user gesture.
+    const needsPermission = typeof DeviceOrientationEvent !== 'undefined' &&
+        typeof DeviceOrientationEvent.requestPermission === 'function';
+    if (!needsPermission) {
+        startTiltListening();
+        return;
+    }
+    if (fromGesture) {
+        DeviceOrientationEvent.requestPermission()
+            .then((state) => { state === 'granted' ? startTiltListening() : revertToJoystick(); })
+            .catch(revertToJoystick);
+    } else if (!tilt.pendingGesture) {
+        // Restored from a saved profile (no gesture yet): ask on the next tap.
+        tilt.pendingGesture = true;
+        const once = () => {
+            document.removeEventListener('pointerdown', once);
+            tilt.pendingGesture = false;
+            if (profile.controlScheme === 'tilt') enableTilt(true);
+        };
+        document.addEventListener('pointerdown', once);
+    }
+}
+
+function applyControlScheme(fromGesture) {
+    if (profile.controlScheme === 'tilt') enableTilt(fromGesture);
+    else disableTilt();
+}
+
+// Runs last in the input chain so tilt owns steering while it is live.
+function pollTilt() {
+    if (!tiltSteerActive()) return;
+    input.steer = tilt.steer;
+    // Mirror the tilt on the (idle) stick so steering stays visible.
+    if (!joystick.isActive && !keyboardActive()) {
+        joystick.stick.style.transform =
+            `translate(calc(-50% + ${(input.steer * joystick.radius).toFixed(1)}px), -50%)`;
+    }
 }
 
 window.addEventListener('resize', handleResize);
@@ -2734,6 +2854,7 @@ function startGame() {
     animateStarted = true;
     animate();
     applySettings();
+    applyControlScheme(false); // re-arm tilt steering from the saved profile
     showHome();              // land on the home screen first
 }
 
