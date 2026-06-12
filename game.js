@@ -110,7 +110,7 @@ const hud = {
 };
 
 // Patch / build number shown top-left. Bump this with each gameplay update.
-const VERSION = 'v1.13.0';
+const VERSION = 'v1.13.1';
 if (hud.build) hud.build.textContent = VERSION;
 
 // Live FPS, averaged over a short window so the readout is steady.
@@ -2371,10 +2371,33 @@ function buildSegControl(containerId, values, labels, profileKey, onChange) {
     });
 }
 
+// The steering control gets its own builder: its buttons act on 'click'
+// instead of 'pointerdown' because iOS only honours
+// DeviceOrientationEvent.requestPermission() from a click/touchend gesture —
+// requesting it on pointerdown is auto-rejected, which would instantly
+// bounce the setting back to Joystick.
+function buildSteeringControl() {
+    const container = document.getElementById('steeringControl');
+    if (!container) return;
+    container.innerHTML = '';
+    [['joystick', 'Joystick'], ['tilt', 'Tilt']].forEach(([val, label]) => {
+        const b = document.createElement('button');
+        b.className = 'seg-btn' + (profile.controlScheme === val ? ' selected' : '');
+        b.textContent = label;
+        b.addEventListener('click', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            profile.controlScheme = val;
+            saveProfile();
+            applyControlScheme(true);
+            buildSteeringControl();
+        });
+        container.appendChild(b);
+    });
+}
+
 function buildSettingsPanel() {
     buildSegControl('cameraControl', ['close', 'normal', 'far'], ['Close', 'Normal', 'Far'], 'cameraMode', null);
-    buildSegControl('steeringControl', ['joystick', 'tilt'], ['Joystick', 'Tilt'], 'controlScheme',
-        () => applyControlScheme(true));
+    buildSteeringControl();
     buildSegControl('lapsControl', [1, 3, 5], ['1', '3', '5'], 'totalLaps', () => { TOTAL_LAPS = profile.totalLaps || 3; });
     applySettings();
 }
@@ -2629,12 +2652,12 @@ function disableTilt() {
     window.removeEventListener('deviceorientation', onDeviceTilt);
 }
 
-function revertToJoystick() {
+function revertToJoystick(reason) {
     profile.controlScheme = 'joystick';
     saveProfile();
     disableTilt();
-    buildSegControl('steeringControl', ['joystick', 'tilt'], ['Joystick', 'Tilt'], 'controlScheme',
-        () => applyControlScheme(true));
+    buildSteeringControl();
+    if (reason) alert(reason);
 }
 
 function enableTilt(fromGesture) {
@@ -2649,17 +2672,21 @@ function enableTilt(fromGesture) {
     }
     if (fromGesture) {
         DeviceOrientationEvent.requestPermission()
-            .then((state) => { state === 'granted' ? startTiltListening() : revertToJoystick(); })
-            .catch(revertToJoystick);
+            .then((state) => {
+                if (state === 'granted') startTiltListening();
+                else revertToJoystick('Motion access was denied, so tilt steering is unavailable. Allow Motion & Orientation access for this site in your browser settings, then pick Tilt again.');
+            })
+            .catch(() => revertToJoystick());
     } else if (!tilt.pendingGesture) {
-        // Restored from a saved profile (no gesture yet): ask on the next tap.
+        // Restored from a saved profile (no gesture yet): ask on the next
+        // tap. 'click' (not pointerdown) — iOS rejects the request otherwise.
         tilt.pendingGesture = true;
         const once = () => {
-            document.removeEventListener('pointerdown', once);
+            document.removeEventListener('click', once);
             tilt.pendingGesture = false;
             if (profile.controlScheme === 'tilt') enableTilt(true);
         };
-        document.addEventListener('pointerdown', once);
+        document.addEventListener('click', once);
     }
 }
 
