@@ -107,7 +107,7 @@ const hud = {
 };
 
 // Patch / build number shown top-left. Bump this with each gameplay update.
-const VERSION = 'v1.11.0';
+const VERSION = 'v1.12.0';
 if (hud.build) hud.build.textContent = VERSION;
 
 // Live FPS, averaged over a short window so the readout is steady.
@@ -125,6 +125,8 @@ function updateFps() {
 }
 
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function smooth01(x) { x = clamp(x, 0, 1); return x * x * (3 - 2 * x); }
+function lerpN(a, b, k) { return a + (b - a) * k; }
 
 // ------------------------------------------------------------
 // Tracks
@@ -188,11 +190,66 @@ const TRACKS = [
             ground: 0x1f3d24, road: 0x2c2f33, skirt: 0x3a2a18,
             center: 0xbfe89a, foliage: 'deepforest', dark: true
         }
-    }
+    },
+    (() => {
+        // Underwater course: almost the whole lap runs inside a transparent
+        // glass tube on the seafloor. Near the end the tube climbs out of the
+        // water and stops — cars are launched off the open lip onto a scripted
+        // parabola and touch down on a beach island where the finish line is.
+        // All `t` values are lap fractions; heights are world units.
+        const WATER = 24, SEA = 8, BEACH = 26, LIP = 31;
+        const DIVE0 = 0.035, DIVE1 = 0.15, ASC0 = 0.70, EXIT = 0.852, LAND = 0.940;
+        return {
+            name: 'Coral Abyss',
+            desc: 'Glass tunnel under the sea · leap to the beach',
+            points: [
+                [116, -12],          // finish line on the beach
+                [104, -36], [80, -56], [48, -74], [8, -86],
+                [-34, -84], [-68, -68], [-94, -38], [-104, 0], [-94, 38],
+                [-68, 68], [-32, 84], [10, 88], [48, 80], [76, 64],
+                [94, 50],            // tunnel lip (launch point)
+                [138, 17],           // beach touchdown (the gap is flown, not driven)
+                [130, -2]
+            ],
+            elev: (t) => {
+                t = ((t % 1) + 1) % 1;
+                if (t < DIVE0) return BEACH;
+                if (t < DIVE1) return BEACH + (SEA - BEACH) * smooth01((t - DIVE0) / (DIVE1 - DIVE0));
+                if (t < ASC0) return SEA + 1.4 * Math.sin(((t - DIVE1) / (ASC0 - DIVE1)) * TWO_PI * 3);
+                if (t < EXIT) return SEA + (LIP - SEA) * smooth01((t - ASC0) / (EXIT - ASC0));
+                if (t < LAND) {
+                    // Across the gap: dip the (roadless) centreline well below
+                    // the scripted flight path so airborne cars never touch
+                    // the invisible ground before the beach.
+                    const k = (t - EXIT) / (LAND - EXIT);
+                    return k < 0.5
+                        ? LIP + (18 - LIP) * smooth01(k * 2)
+                        : 18 + (BEACH - 18) * smooth01(k * 2 - 1);
+                }
+                return BEACH;
+            },
+            boosts: [0.20, 0.40, 0.58, 0.74, 0.965],
+            ramps: [0.45],
+            leap: { exit: EXIT, land: LAND, launchVy: 1.1 },
+            tunnel: { from: DIVE0, to: EXIT, radius: 9.5, lift: 2.8 },
+            beach: { from: LAND - 0.012, to: 0.05 },
+            theme: {
+                sky: 0x9fdcec, fog: 0xaee0ee, fogNear: 150, fogFar: 460,
+                ground: 0x9a8d66, road: 0x3a4148, skirt: 0xb8a877,
+                center: 0x66f2ff, foliage: 'reef', noSkirts: true,
+                underwater: { surfaceY: WATER, fog: 0x0d4a63, bg: 0x0a3950, fogNear: 45, fogFar: 230 }
+            }
+        };
+    })()
 ];
 
 let currentTrackIndex = 0;
 let currentTrack = TRACKS[0];
+
+// Leap / tunnel runtime state, rebuilt per track in buildTrack().
+let gapFlags = [];       // per-sample: true where the road is missing (flight zone)
+let leapState = null;    // { exitIdx, landIdx, dirX, dirZ, vy, speed }
+let tunnelClamp = null;  // { i0, i1, lim } glass-wall lateral limit
 
 function elevationAt(t) {
     return currentTrack.elev ? currentTrack.elev(((t % 1) + 1) % 1) : 0;
@@ -259,6 +316,10 @@ function buildScene() {
     buildWorld();
     buildTrack();
     buildFinishGate();
+    buildWater();
+    buildGlassTunnel();
+    buildBeachApron();
+    setupAtmosphere();
     buildBoostPads();
     buildRamps();
     buildFoliage();
@@ -333,6 +394,42 @@ function buildTrack() {
         centerPoints[i].y = elevationAt(i / SAMPLES);
     }
 
+    // Leap gap: a stretch of the lap with no road. Cars cross it on a
+    // scripted parabola (see stepRacer). The launch velocity is derived from
+    // the actual sampled geometry so the flight always reaches the beach.
+    gapFlags = new Array(SAMPLES).fill(false);
+    leapState = null;
+    tunnelClamp = null;
+    if (currentTrack.leap) {
+        const L = currentTrack.leap;
+        const exitIdx = Math.floor(L.exit * SAMPLES);
+        const landIdx = Math.floor(L.land * SAMPLES);
+        for (let i = exitIdx + 1; i < landIdx; i++) gapFlags[i] = true;
+
+        const E = centerPoints[exitIdx];
+        const aim = centerPoints[(landIdx + 5) % SAMPLES]; // a few metres past the road edge
+        const dx = aim.x - E.x, dz = aim.z - E.z;
+        const D = Math.hypot(dx, dz);
+        const drop = Math.max(0.1, E.y - aim.y);
+        const T = (L.launchVy + Math.sqrt(L.launchVy * L.launchVy + 2 * GRAVITY * drop)) / GRAVITY;
+        // Air drag + discrete integration land the car ~4 units short of the
+        // continuous solution, so aiming past the road edge centres the
+        // touchdown on the landing strip.
+        leapState = {
+            exitIdx, landIdx,
+            dirX: dx / D, dirZ: dz / D,
+            vy: L.launchVy,
+            speed: D / T
+        };
+    }
+    if (currentTrack.tunnel) {
+        tunnelClamp = {
+            i0: Math.floor(currentTrack.tunnel.from * SAMPLES),
+            i1: Math.floor(currentTrack.tunnel.to * SAMPLES),
+            lim: 7.6
+        };
+    }
+
     // Horizontal tangents (steering/geometry use XZ only).
     tangents = [];
     for (let i = 0; i < SAMPLES; i++) {
@@ -356,6 +453,7 @@ function buildTrack() {
     const verts = [];
     for (let i = 0; i < SAMPLES; i++) {
         const j = (i + 1) % SAMPLES;
+        if (gapFlags[i] || gapFlags[j]) continue; // no road across the leap
         const l0 = leftEdge[i], r0 = rightEdge[i];
         const l1 = leftEdge[j], r1 = rightEdge[j];
         verts.push(l0.x, l0.y + 0.01, l0.z, r0.x, r0.y + 0.01, r0.z, l1.x, l1.y + 0.01, l1.z);
@@ -391,15 +489,22 @@ function buildFinishGate() {
     const bCanvas = document.createElement('canvas');
     bCanvas.width = 512; bCanvas.height = 128;
     const bCtx = bCanvas.getContext('2d');
-    bCtx.clearRect(0, 0, 512, 128);
-    bCtx.font = 'bold italic 96px sans-serif';
-    bCtx.textAlign = 'center';
-    bCtx.textBaseline = 'middle';
-    bCtx.fillStyle = '#ffffff';
-    bCtx.shadowColor = 'rgba(0,0,0,0.5)';
-    bCtx.shadowBlur = 12;
-    bCtx.fillText('FINISH', 256, 64);
+    const drawBannerText = () => {
+        bCtx.clearRect(0, 0, 512, 128);
+        bCtx.font = 'italic 700 96px "Chakra Petch", sans-serif';
+        bCtx.textAlign = 'center';
+        bCtx.textBaseline = 'middle';
+        bCtx.fillStyle = '#ffffff';
+        bCtx.shadowColor = 'rgba(0,0,0,0.5)';
+        bCtx.shadowBlur = 12;
+        bCtx.fillText('FINISH', 256, 64);
+    };
+    drawBannerText();
     const bannerTex = new THREE.CanvasTexture(bCanvas);
+    // Redraw once web fonts finish loading (banner builds before then)
+    if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(() => { drawBannerText(); bannerTex.needsUpdate = true; });
+    }
     const bannerMat = new THREE.MeshBasicMaterial({ map: bannerTex, transparent: true, side: THREE.DoubleSide, depthWrite: false });
     const banner = new THREE.Mesh(new THREE.PlaneGeometry(bannerW, bannerW / 4), bannerMat);
     banner.position.set(0, 10, 0);
@@ -414,6 +519,7 @@ function buildFinishGate() {
 // Vertical "embankment" walls dropping from an elevated road edge
 // down to the ground, so raised sections look solid (not floating).
 function buildSkirts(edge) {
+    if (currentTrack.theme.noSkirts) return;
     const verts = [];
     let any = false;
     for (let i = 0; i < SAMPLES; i++) {
@@ -438,6 +544,7 @@ function buildCurbs(edge) {
     const white = makeMerger(), red = makeMerger();
     const m = new THREE.Matrix4();
     for (let i = 0; i < SAMPLES; i++) {
+        if (gapFlags[i] || gapFlags[(i + 1) % SAMPLES]) continue;
         const a = edge[i], b = edge[(i + 1) % SAMPLES];
         const dx = b.x - a.x, dz = b.z - a.z;
         const segLen = Math.hypot(dx, dz);
@@ -458,6 +565,7 @@ function buildCenterLine() {
     const rotX = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
     const step = 6;
     for (let i = 0; i < SAMPLES; i += step * 2) {
+        if (gapFlags[i] || gapFlags[Math.min(i + step, SAMPLES - 1)]) continue;
         const a = centerPoints[i], b = centerPoints[Math.min(i + step, SAMPLES - 1)];
         const dx = b.x - a.x, dz = b.z - a.z;
         const segLen = Math.hypot(dx, dz);
@@ -678,6 +786,56 @@ function addBush(x, z, scale, baseY, opts, M) {
     mergeGeo(M.bush, new THREE.IcosahedronGeometry(1.2, 0), m, green);
 }
 
+// Beach palm: leaning trunk + a crown of drooping fronds.
+function addPalm(x, z, s, baseY, M) {
+    const lean = (Math.random() - 0.5) * 0.24;
+    const h = 6.5 * s;
+    mergeGeo(M.trunk, new THREE.CylinderGeometry(0.22, 0.4, 6.5, 5), new THREE.Matrix4().compose(
+        new THREE.Vector3(x, baseY + h / 2, z),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, lean)),
+        new THREE.Vector3(s, s, s)
+    ));
+    const tx = x - Math.sin(lean) * h, ty = baseY + Math.cos(lean) * h;
+    const green = new THREE.Color().setHSL(0.33 + Math.random() * 0.04, 0.55, 0.32);
+    const upAx = new THREE.Vector3(0, 1, 0), zAx = new THREE.Vector3(0, 0, 1);
+    for (let i = 0; i < 6; i++) {
+        const yaw = (i / 6) * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
+        const q = new THREE.Quaternion().setFromAxisAngle(upAx, yaw)
+            .multiply(new THREE.Quaternion().setFromAxisAngle(zAx, -0.5 - Math.random() * 0.2));
+        const frond = new THREE.BoxGeometry(3.4, 0.09, 0.85);
+        frond.translate(1.55, 0, 0); // hinge at the trunk top
+        mergeGeo(M.leaf, frond, new THREE.Matrix4().compose(
+            new THREE.Vector3(tx, ty, z), q, new THREE.Vector3(s, s, s)), green);
+    }
+}
+
+// Seafloor decor: kelp strands, coral clusters and rocks (sit at y=0).
+function addReefItem(x, z, M) {
+    const r = Math.random();
+    const m = new THREE.Matrix4();
+    if (r < 0.45) {
+        const h = 2.2 + Math.random() * 1.6;
+        const lean = (Math.random() - 0.5) * 0.3;
+        const col = new THREE.Color().setHSL(0.36 + Math.random() * 0.07, 0.55, 0.16 + Math.random() * 0.10);
+        for (let j = 0; j < 4; j++) {
+            m.makeTranslation(x + lean * j * 1.1, h * 0.5 + j * h * 0.82, z + lean * j * 0.6);
+            mergeGeo(M.leaf, new THREE.ConeGeometry(0.34 - j * 0.05, h, 5), m, col);
+        }
+    } else if (r < 0.8) {
+        const hue = Math.random() < 0.5 ? 0.97 : 0.06; // pink or orange coral
+        for (let j = 0; j < 3; j++) {
+            const col = new THREE.Color().setHSL(hue + Math.random() * 0.03, 0.6, 0.5 + Math.random() * 0.12);
+            const s = 0.6 + Math.random() * 0.9;
+            m.makeTranslation(x + (Math.random() - 0.5) * 2.2, 0.4 + s * 0.5, z + (Math.random() - 0.5) * 2.2);
+            mergeGeo(M.bush, new THREE.IcosahedronGeometry(s, 0), m, col);
+        }
+    } else {
+        const s = 1.0 + Math.random() * 1.6;
+        m.compose(new THREE.Vector3(x, s * 0.35, z), new THREE.Quaternion(), new THREE.Vector3(1, 0.6, 1));
+        mergeGeo(M.cap, new THREE.IcosahedronGeometry(s, 0), m);
+    }
+}
+
 function buildFoliage() {
     const kind = currentTrack.theme.foliage;
     // Per-theme placement: forest is dense/dark, snowy is sparse pines
@@ -685,7 +843,8 @@ function buildFoliage() {
     const cfg = {
         mixed:      { step: 9,  skip: 0.45, near: 7,  spread: 55, bushChance: 0.22, opts: {} },
         pine:       { step: 7,  skip: 0.35, near: 4,  spread: 26, bushChance: 0.0,  opts: { pine: true, snow: true } },
-        deepforest: { step: 5,  skip: 0.18, near: 5,  spread: 48, bushChance: 0.32, opts: { dark: true, pine: true } }
+        deepforest: { step: 5,  skip: 0.18, near: 5,  spread: 48, bushChance: 0.32, opts: { dark: true, pine: true } },
+        reef:       { step: 6,  skip: 0.30, near: 6,  spread: 36, bushChance: 0.0,  opts: { reef: true } }
     }[kind] || { step: 9, skip: 0.45, near: 7, spread: 55, bushChance: 0.22, opts: {} };
 
     const M = {
@@ -694,6 +853,19 @@ function buildFoliage() {
         cap: makeMerger(),
         bush: makeMerger(true)
     };
+
+    // Palms may only stand on the solid middle of the beach island, away
+    // from the tapered headlands (which sit at/below the waterline).
+    let palmOk = null;
+    if (currentTrack.beach) {
+        const b0 = Math.floor(currentTrack.beach.from * SAMPLES);
+        const bspan = Math.floor((((currentTrack.beach.to - currentTrack.beach.from) % 1) + 1) % 1 * SAMPLES);
+        const margin = Math.floor(bspan * 0.18);
+        palmOk = (idx) => {
+            const rel = ((idx - b0) % SAMPLES + SAMPLES) % SAMPLES;
+            return rel >= margin && rel <= bspan - margin;
+        };
+    }
 
     for (let i = 0; i < SAMPLES; i += cfg.step) {
         const c = centerPoints[i];
@@ -706,6 +878,18 @@ function buildFoliage() {
             const jitterZ = (Math.random() - 0.5) * 6;
             const x = c.x + px * side * dist + jitterX;
             const z = c.z + pz * side * dist + jitterZ;
+            if (cfg.opts.reef) {
+                // Above the waterline: palms on the island shelf, close to the
+                // road. Deep down: kelp/coral/rocks on the seafloor, kept clear
+                // of the glass tube.
+                const wy = currentTrack.theme.underwater ? currentTrack.theme.underwater.surfaceY : 1e9;
+                if (c.y > wy + 1) {
+                    if (palmOk && palmOk(i) && dist < ROAD_HALF + 13) addPalm(x, z, 0.85 + Math.random() * 0.5, c.y - 0.75, M);
+                } else if (c.y < wy - 5 && dist > ROAD_HALF + 7) {
+                    addReefItem(x, z, M);
+                }
+                return;
+            }
             // Sit foliage near the local road height so it follows slopes.
             const baseY = Math.max(0, c.y - 1);
             if (Math.random() < cfg.bushChance) addBush(x, z, 0.8 + Math.random() * 0.7, baseY, cfg.opts, M);
@@ -716,7 +900,7 @@ function buildFoliage() {
     // Emit one mesh per material batch (4 draw calls instead of hundreds).
     if (M.trunk.pos.length) scene.add(mergerMesh(M.trunk, new THREE.MeshPhongMaterial({ color: 0x7a5230, flatShading: true })));
     if (M.leaf.pos.length) scene.add(mergerMesh(M.leaf, new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true })));
-    if (M.cap.pos.length) scene.add(mergerMesh(M.cap, new THREE.MeshPhongMaterial({ color: 0xf5f9ff, flatShading: true })));
+    if (M.cap.pos.length) scene.add(mergerMesh(M.cap, new THREE.MeshPhongMaterial({ color: kind === 'reef' ? 0x6f7d8a : 0xf5f9ff, flatShading: true })));
     if (M.bush.pos.length) scene.add(mergerMesh(M.bush, new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true })));
 }
 
@@ -740,6 +924,185 @@ function buildMountains() {
         cap.position.set(x, h - 10 - h * 0.2, z);
         scene.add(cap);
     }
+}
+
+// ------------------------------------------------------------
+// Underwater track: water surface, glass tunnel, beach island
+// ------------------------------------------------------------
+function buildWater() {
+    const uw = currentTrack.theme.underwater;
+    if (!uw) return;
+    const water = new THREE.Mesh(
+        new THREE.PlaneGeometry(1600, 1600),
+        new THREE.MeshPhongMaterial({
+            color: 0x1593bd, transparent: true, opacity: 0.5, side: THREE.DoubleSide,
+            depthWrite: false, shininess: 120, specular: 0xbfeaff,
+            emissive: 0x0d4a60, emissiveIntensity: 0.3
+        })
+    );
+    water.rotation.x = -Math.PI / 2;
+    water.position.y = uw.surfaceY;
+    water.renderOrder = 1; // blend over the seafloor, before the glass
+    scene.add(water);
+}
+
+// Transparent cylindrical tube enclosing the underwater stretch of road,
+// with opaque structural ribs and seafloor pylons (each batched into one
+// draw call). Both ends are left open: the entrance mouth on the beach and
+// the launch lip high above the water.
+function buildGlassTunnel() {
+    const spec = currentTrack.tunnel;
+    if (!spec) return;
+    const i0 = Math.floor(spec.from * SAMPLES);
+    const i1 = Math.floor(spec.to * SAMPLES);
+    const R = spec.radius, LIFT = spec.lift, SEG = 18, STEP = 2;
+
+    // Ring frames along the centreline, tilted with the full 3D tangent so
+    // the tube bends smoothly through the dive and the final ascent.
+    const rings = [];
+    const up = new THREE.Vector3(0, 1, 0);
+    const tan = new THREE.Vector3(), side = new THREE.Vector3(), vup = new THREE.Vector3();
+    for (let i = i0; i <= i1; i += STEP) {
+        const a = centerPoints[(i - 1 + SAMPLES) % SAMPLES];
+        const b = centerPoints[(i + 1) % SAMPLES];
+        const c = centerPoints[i];
+        tan.set(b.x - a.x, b.y - a.y, b.z - a.z).normalize();
+        side.crossVectors(up, tan).normalize();
+        vup.crossVectors(tan, side).normalize();
+        const ring = [];
+        for (let s = 0; s <= SEG; s++) {
+            const ang = (s / SEG) * Math.PI * 2;
+            const nx = side.x * Math.cos(ang) + vup.x * Math.sin(ang);
+            const ny = side.y * Math.cos(ang) + vup.y * Math.sin(ang);
+            const nz = side.z * Math.cos(ang) + vup.z * Math.sin(ang);
+            ring.push(c.x + nx * R, c.y + LIFT + ny * R, c.z + nz * R, nx, ny, nz);
+        }
+        rings.push({ ring, cx: c.x, cy: c.y + LIFT, cz: c.z, tx: tan.x, ty: tan.y, tz: tan.z });
+    }
+
+    // Glass skin: stitch consecutive rings into quads.
+    const pos = [], norm = [];
+    for (let r = 0; r < rings.length - 1; r++) {
+        const A = rings[r].ring, B = rings[r + 1].ring;
+        for (let s = 0; s < SEG; s++) {
+            const a0 = s * 6, a1 = (s + 1) * 6;
+            pos.push(A[a0], A[a0+1], A[a0+2], B[a0], B[a0+1], B[a0+2], B[a1], B[a1+1], B[a1+2]);
+            norm.push(A[a0+3], A[a0+4], A[a0+5], B[a0+3], B[a0+4], B[a0+5], B[a1+3], B[a1+4], B[a1+5]);
+            pos.push(A[a0], A[a0+1], A[a0+2], B[a1], B[a1+1], B[a1+2], A[a1], A[a1+1], A[a1+2]);
+            norm.push(A[a0+3], A[a0+4], A[a0+5], B[a1+3], B[a1+4], B[a1+5], A[a1+3], A[a1+4], A[a1+5]);
+        }
+    }
+    const glassGeo = new THREE.BufferGeometry();
+    glassGeo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    glassGeo.setAttribute('normal', new THREE.Float32BufferAttribute(norm, 3));
+    const glass = new THREE.Mesh(glassGeo, new THREE.MeshPhongMaterial({
+        color: 0xbfe8ff, transparent: true, opacity: 0.16, side: THREE.DoubleSide,
+        depthWrite: false, shininess: 140, specular: 0x9fd8ff,
+        emissive: 0x0a2e3d, emissiveIntensity: 0.35
+    }));
+    glass.renderOrder = 2; // draw after the water plane
+    scene.add(glass);
+
+    const ribs = makeMerger(), pylons = makeMerger();
+    const zAxis = new THREE.Vector3(0, 0, 1);
+    const q = new THREE.Quaternion(), m = new THREE.Matrix4();
+    const one = new THREE.Vector3(1, 1, 1), p = new THREE.Vector3();
+    rings.forEach((rg, k) => {
+        if (k % 8 === 0) {
+            q.setFromUnitVectors(zAxis, tan.set(rg.tx, rg.ty, rg.tz).normalize());
+            m.compose(p.set(rg.cx, rg.cy, rg.cz), q, one);
+            mergeGeo(ribs, new THREE.TorusGeometry(R + 0.12, 0.22, 5, 30), m);
+        }
+        if (k % 10 === 5) {
+            const bottom = rg.cy - R;
+            if (bottom > 1.0) {
+                const h = bottom + 0.4;
+                mergeGeo(pylons, new THREE.CylinderGeometry(0.7, 0.95, h, 6),
+                    new THREE.Matrix4().makeTranslation(rg.cx, h / 2, rg.cz));
+            }
+        }
+    });
+    if (ribs.pos.length) scene.add(mergerMesh(ribs, new THREE.MeshPhongMaterial({ color: 0x8fb0bf, shininess: 80, flatShading: true })));
+    if (pylons.pos.length) scene.add(mergerMesh(pylons, new THREE.MeshPhongMaterial({ color: 0x5f7682, flatShading: true })));
+}
+
+// Sand island under the beach stretch: a shelf beside the road, a shoreline
+// band and a wide base sloping to the seafloor, tapered at both ends so the
+// island starts as a headland under the touchdown point.
+function buildBeachApron() {
+    const spec = currentTrack.beach;
+    if (!spec) return;
+    const i0 = Math.floor(spec.from * SAMPLES);
+    const span = Math.floor((((spec.to - spec.from) % 1) + 1) % 1 * SAMPLES);
+    const LATS = [16, 26, 46];
+
+    const profile = (k) => {
+        const i = (i0 + k) % SAMPLES;
+        const c = centerPoints[i];
+        const t = tangents[i];
+        const w = smooth01(k / (span * 0.14)) * smooth01((span - k) / (span * 0.14));
+        const targets = [c.y - 0.7, 22.6, 0.15];
+        return {
+            c, t,
+            lats: LATS.map(l => lerpN(7, l, w)),
+            ys: targets.map(y => lerpN(c.y - 0.05, Math.min(y, c.y - 0.05), w))
+        };
+    };
+    const node = (P, sideSign, n) => {
+        const px = -P.t.z * sideSign, pz = P.t.x * sideSign;
+        const lat = n === 0 ? 7 : P.lats[n - 1];
+        const y = n === 0 ? P.c.y - 0.05 : P.ys[n - 1];
+        return [P.c.x + px * lat, y, P.c.z + pz * lat];
+    };
+
+    const verts = [];
+    let prev = profile(0);
+    for (let k = 1; k <= span; k++) {
+        const cur = profile(k);
+        [-1, 1].forEach(sideSign => {
+            for (let n = 0; n < 3; n++) {
+                const a = node(prev, sideSign, n), b = node(cur, sideSign, n);
+                const c2 = node(cur, sideSign, n + 1), d = node(prev, sideSign, n + 1);
+                verts.push(...a, ...b, ...c2, ...a, ...c2, ...d);
+            }
+        });
+        prev = cur;
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+    geo.computeVertexNormals();
+    const sand = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0xd9c98f, side: THREE.DoubleSide }));
+    sand.receiveShadow = true;
+    scene.add(sand);
+}
+
+// ------------------------------------------------------------
+// Underwater atmosphere: cross-fade fog + sky as the camera
+// passes through the water surface.
+// ------------------------------------------------------------
+const _atmo = { active: false };
+
+function setupAtmosphere() {
+    const th = currentTrack.theme;
+    _atmo.active = !!th.underwater;
+    if (!_atmo.active) return;
+    const uw = th.underwater;
+    _atmo.surfaceY = uw.surfaceY;
+    _atmo.aboveFog = new THREE.Color(th.fog);
+    _atmo.belowFog = new THREE.Color(uw.fog);
+    _atmo.aboveBg = new THREE.Color(th.sky);
+    _atmo.belowBg = new THREE.Color(uw.bg);
+    _atmo.aboveNear = th.fogNear; _atmo.aboveFar = th.fogFar;
+    _atmo.belowNear = uw.fogNear; _atmo.belowFar = uw.fogFar;
+}
+
+function updateAtmosphere() {
+    if (!_atmo.active || !scene || !scene.fog) return;
+    const k = smooth01((camera.position.y - (_atmo.surfaceY - 1.5)) / 3); // 0 below, 1 above
+    scene.fog.color.copy(_atmo.belowFog).lerp(_atmo.aboveFog, k);
+    scene.background.copy(_atmo.belowBg).lerp(_atmo.aboveBg, k);
+    scene.fog.near = lerpN(_atmo.belowNear, _atmo.aboveNear, k);
+    scene.fog.far = lerpN(_atmo.belowFar, _atmo.aboveFar, k);
 }
 
 // ------------------------------------------------------------
@@ -924,7 +1287,7 @@ function makeRacer(opts) {
         baseColor: opts.color,
         isPlayer: !!opts.isPlayer,
         x: 0, z: 0, y: 0, heading: 0, speed: 0,
-        vx: 0, vz: 0, vy: 0, airborne: false,
+        vx: 0, vz: 0, vy: 0, airborne: false, inFlight: false,
         lap: 1, progress: 0, lastProgress: 0, lastIndex: 0,
         finished: false, finishTime: null, finishOrder: 0,
         boostTime: 0,
@@ -978,7 +1341,7 @@ function placeRacersAtStart() {
         r.z = start.z - t.z * back + pz * side;
         r.heading = heading;
         r.speed = 0;
-        r.vx = 0; r.vz = 0; r.vy = 0; r.airborne = false;
+        r.vx = 0; r.vz = 0; r.vy = 0; r.airborne = false; r.inFlight = false;
         r.lastIndex = 0;
         r.y = trackHeightAt(r);
         r.lap = 1; r.progress = 0; r.lastProgress = 0;
@@ -1098,6 +1461,37 @@ function stepRacer(r, ctrl) {
     // Integrate horizontal position.
     r.x += r.vx; r.z += r.vz;
 
+    // Glass tunnel walls: slide along the tube instead of leaving the road.
+    if (tunnelClamp && !r.airborne && r.lastIndex >= tunnelClamp.i0 && r.lastIndex <= tunnelClamp.i1) {
+        const c = centerPoints[r.lastIndex], tt = tangents[r.lastIndex];
+        const rx = tt.z, rz = -tt.x; // right-perpendicular
+        const lat = (r.x - c.x) * rx + (r.z - c.z) * rz;
+        if (Math.abs(lat) > tunnelClamp.lim) {
+            const over = lat - clamp(lat, -tunnelClamp.lim, tunnelClamp.lim);
+            r.x -= rx * over; r.z -= rz * over;
+            const vlat = r.vx * rx + r.vz * rz;
+            if (vlat * lat > 0) { r.vx -= rx * vlat; r.vz -= rz * vlat; }
+        }
+    }
+
+    // Scripted leap: reaching the tunnel's open lip fires every car onto the
+    // same deterministic parabola across the bay to the beach. Velocity is
+    // overwritten, so the flight is guaranteed regardless of entry speed.
+    if (leapState && !r.airborne && !r.inFlight) {
+        const d = r.lastIndex - leapState.exitIdx;
+        if (d > -8 && d < 10) {
+            nearestIndex(r); // lastIndex is one frame stale; refresh before deciding
+            if (r.lastIndex >= leapState.exitIdx - 1 && r.lastIndex <= leapState.exitIdx + 9) {
+                r.vx = leapState.dirX * leapState.speed;
+                r.vz = leapState.dirZ * leapState.speed;
+                r.vy = leapState.vy;
+                r.heading = Math.atan2(leapState.dirX, leapState.dirZ);
+                r.airborne = true;
+                r.inFlight = true;
+            }
+        }
+    }
+
     // Vertical: ramps launch a jump; otherwise the car hugs the road surface.
     // Crucially, a downhill stretch does NOT make the car "fall" — only a ramp
     // does. That keeps the engine/steering live over hills (they're gated on
@@ -1113,7 +1507,7 @@ function stepRacer(r, ctrl) {
         // mid-jump: integrate and fall until we meet the ground again
         r.y += r.vy;
         r.vy -= GRAVITY;
-        if (r.y <= groundY) { r.y = groundY; r.vy = 0; r.airborne = false; }
+        if (r.y <= groundY) { r.y = groundY; r.vy = 0; r.airborne = false; r.inFlight = false; }
     } else if (r.vy > 0.01) {
         // just left a ramp lip with upward speed -> become airborne
         r.airborne = true;
@@ -1237,6 +1631,8 @@ function handleCollisions() {
     for (let i = 0; i < racers.length; i++) {
         for (let j = i + 1; j < racers.length; j++) {
             const a = racers[i], b = racers[j];
+            if (a.inFlight || b.inFlight) continue;        // scripted flight stays scripted
+            if (Math.abs(a.y - b.y) > 3) continue;         // one car is flying over the other
             let dx = b.x - a.x, dz = b.z - a.z;
             let dist = Math.hypot(dx, dz);
             if (dist === 0) { dx = 0.01; dist = 0.01; }
@@ -1296,7 +1692,9 @@ function update() {
     racers.forEach(r => {
         let ctrl;
         if (r.isPlayer) {
-            ctrl = { steer: input.steer, throttle: input.throttle, boost: input.boost };
+            // _autopilot: console/testing hook — AI drives the player car.
+            ctrl = window._autopilot ? aiControl(r)
+                 : { steer: input.steer, throttle: input.throttle, boost: input.boost };
         } else {
             ctrl = race.started ? aiControl(r) : { steer: 0, throttle: 0, boost: false };
         }
@@ -1350,6 +1748,7 @@ function animate() {
     if (steps === MAX_SUBSTEPS) _accum = 0; // dropped frames: don't spiral
 
     updateParticles();
+    updateAtmosphere();
     renderer.render(scene, camera);
     drawMinimap();
     updateFps();
@@ -1472,19 +1871,21 @@ function drawMinimap() {
     ctx.lineWidth = 5;
     ctx.strokeStyle = 'rgba(255,255,255,0.80)';
     ctx.beginPath();
-    let first = true;
-    for (const p of centerPoints) {
+    let pen = false;
+    for (let i = 0; i <= SAMPLES; i++) {
+        const idx = i % SAMPLES;
+        if (gapFlags[idx]) { pen = false; continue; } // leave the leap as a break
+        const p = centerPoints[idx];
         const mp = wc(p.x, p.z);
-        if (first) { ctx.moveTo(mp.x, mp.y); first = false; }
+        if (!pen) { ctx.moveTo(mp.x, mp.y); pen = true; }
         else ctx.lineTo(mp.x, mp.y);
     }
-    ctx.closePath();
     ctx.stroke();
     ctx.shadowBlur = 0;
 
-    // Start/finish marker (yellow dot)
+    // Start/finish marker (gold dot)
     const sf = wc(centerPoints[0].x, centerPoints[0].z);
-    ctx.fillStyle = '#ffd166';
+    ctx.fillStyle = '#FFC233';
     ctx.beginPath();
     ctx.arc(sf.x, sf.y, 4, 0, Math.PI * 2);
     ctx.fill();
@@ -1543,7 +1944,7 @@ function startCountdown() {
             i++;
             setTimeout(tick, 1000);
         } else {
-            showCenter('<span style="color:#2ecc71">GO!</span>', false);
+            showCenter('<span style="color:#3DDC84">GO!</span>', false);
             beginRace();
         }
     };
