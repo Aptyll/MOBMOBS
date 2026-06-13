@@ -50,6 +50,27 @@
     <!-- Mini-map (top-right): course outline + racer positions -->
     <canvas id="minimap"></canvas>
 
+    <!-- Split-screen vertical divider (2-player only) -->
+    <div id="splitDivider"></div>
+
+    <!-- Split-screen per-player HUD (2-player only): one bar per viewport half -->
+    <div id="splitHud">
+        <div class="sp-hud sp-left">
+            <span class="sp-tag sp-tag-1">P1</span>
+            <span class="sp-stat"><label>POS</label><b id="sp1Pos">1/4</b></span>
+            <span class="sp-stat"><label>LAP</label><b id="sp1Lap">1/3</b></span>
+            <span class="sp-stat sp-spd"><b id="sp1Spd">0</b><label>MPH</label></span>
+            <span class="sp-boost-track"><span id="sp1Boost" class="sp-boost"></span></span>
+        </div>
+        <div class="sp-hud sp-right">
+            <span class="sp-tag sp-tag-2">P2</span>
+            <span class="sp-stat"><label>POS</label><b id="sp2Pos">1/4</b></span>
+            <span class="sp-stat"><label>LAP</label><b id="sp2Lap">1/3</b></span>
+            <span class="sp-stat sp-spd"><b id="sp2Spd">0</b><label>MPH</label></span>
+            <span class="sp-boost-track"><span id="sp2Boost" class="sp-boost"></span></span>
+        </div>
+    </div>
+
     <!-- Center messages (countdown / boost) -->
     <div id="centerMessage"></div>
 
@@ -92,7 +113,8 @@
             </div>
 
             <div class="home-actions">
-                <button class="btn-primary" id="playBtn">PLAY</button>
+                <button class="btn-primary" id="playBtn">1 PLAYER</button>
+                <button class="btn-primary" id="twoPlayerBtn">2 PLAYERS</button>
                 <button class="btn-secondary" id="garageBtn">GARAGE</button>
             </div>
         </div>

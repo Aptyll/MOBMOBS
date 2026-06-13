@@ -739,6 +739,13 @@ html, body {
     transition: border-color 0.15s ease, color 0.15s ease;
 }
 #menuBtn:hover { border-color: var(--cyan); color: var(--cyan); }
+/* In split-screen the top-right corner belongs to the P2 HUD, so the settings
+   button moves onto the centre divider where it clears both halves. */
+body.splitscreen #menuBtn {
+    right: auto;
+    left: 50%;
+    transform: translateX(-50%);
+}
 
 /* ---------- Mini-map (top-left, zoomed on player) ---------- */
 #minimap {
@@ -754,6 +761,116 @@ html, body {
 }
 @media (max-height: 430px) {
     #minimap { width: 180px; height: 180px; }
+}
+
+/* ---------- Split-screen (2-player) ---------- */
+/* Thin vertical seam between the two viewport halves. */
+#splitDivider {
+    position: fixed;
+    top: 0;
+    left: 50%;
+    width: 2px;
+    height: 100%;
+    margin-left: -1px;
+    z-index: 115;
+    visibility: hidden;
+    pointer-events: none;
+    background: rgba(0, 0, 0, 0.55);
+    box-shadow: 0 0 0 1px rgba(143, 168, 205, 0.22);
+}
+
+#splitHud {
+    position: fixed;
+    inset: 0;
+    z-index: 116;
+    visibility: hidden;
+    pointer-events: none;
+}
+
+/* One readout bar pinned to the top of each half. */
+.sp-hud {
+    position: absolute;
+    top: max(10px, env(safe-area-inset-top));
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 12px;
+    border-radius: 12px;
+    background: rgba(11, 14, 20, 0.62);
+    border: 1px solid var(--stroke);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    font-family: var(--font-display);
+    color: var(--text-hi);
+}
+.sp-left  { left: max(12px, env(safe-area-inset-left)); }
+.sp-right { right: max(12px, env(safe-area-inset-right)); }
+
+.sp-tag {
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: 0.06em;
+    padding: 2px 8px;
+    border-radius: 8px;
+    color: #0B0E14;
+}
+.sp-tag-1 { background: var(--gold); }
+.sp-tag-2 { background: var(--cyan); }
+
+.sp-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    line-height: 1.05;
+}
+.sp-stat label {
+    font-family: var(--font-body);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    color: var(--text-low);
+}
+.sp-stat b { font-size: 17px; font-weight: 700; }
+.sp-spd b { font-size: 22px; color: var(--cyan); }
+
+.sp-boost-track {
+    width: 54px;
+    height: 7px;
+    border-radius: 4px;
+    background: rgba(143, 168, 205, 0.18);
+    overflow: hidden;
+}
+.sp-boost {
+    display: block;
+    width: 0%;
+    height: 100%;
+    border-radius: 4px;
+    background: linear-gradient(90deg, var(--orange), var(--gold));
+    transition: width 0.12s linear;
+}
+.sp-boost.ready {
+    background: var(--cyan);
+    box-shadow: 0 0 8px var(--cyan);
+}
+
+/* Narrow halves on short landscape phones: tighten the bars. */
+@media (max-height: 430px) {
+    .sp-hud { gap: 8px; padding: 5px 9px; }
+    .sp-stat b { font-size: 15px; }
+    .sp-spd b { font-size: 18px; }
+    .sp-boost-track { width: 42px; }
+}
+
+/* Dual-placement finish line for 2-player. */
+#finishOrd .fin-p {
+    display: block;
+    font-size: 0.5em;
+    line-height: 1.25;
+    opacity: 0.7;
+}
+#finishOrd .fin-p.fin-win {
+    opacity: 1;
+    color: var(--gold);
 }
 
 /* ---------- Rotate hint (small, non-blocking banner) ---------- */

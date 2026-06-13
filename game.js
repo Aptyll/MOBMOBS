@@ -23,6 +23,12 @@
 // Three.js scene objects
 let scene, camera, renderer;
 
+// Local multiplayer: 1 = single player, 2 = split-screen co-op race.
+// `cameras` holds one chase camera per human player; `camera` aliases
+// cameras[0] for all the single-camera code paths (atmosphere, garage, etc).
+let numPlayers = 1;
+let cameras = [];
+
 // Track data
 let trackCurve;
 let centerPoints = [];   // gameplay samples (Vector3 with elevation, closed)
@@ -51,8 +57,7 @@ const _flame = { x: new Float32Array(FLAME_MAX), y: new Float32Array(FLAME_MAX),
 
 let flameGeo = null, flamePts = null;
 
-// Screen FX state
-let _currentFov = 68;
+// Screen FX state (each chase camera tracks its own smoothed FOV in cam._fov)
 const BASE_FOV = 68, MAX_FOV = 71;
 
 // Boost pads
@@ -67,12 +72,23 @@ const GRAVITY = 0.05;    // per-frame downward accel while airborne
 
 // Racers (player + AI)
 let racers = [];
-let player = null;
+let player = null;        // primary human (player 1); aliases players[0]
+let players = [];         // all human racers (1 or 2)
 const AI_COLORS = [0x3498db, 0x2ecc71, 0xf1c40f, 0x9b59b6, 0xe67e22];
 const CAR_RADIUS = 1.9;  // collision radius
 
-// Control input (player): steer/throttle in [-1,1], boost is momentary
-const input = { steer: 0, throttle: 0, boost: false };
+// Player 2's car look (distinct from the customised player-1 car so the two
+// are easy to tell apart on the split screen).
+const P2_LOOK = { bodyColor: 0x1e88e5, reactorColor: 0xffea00, rimColor: 0x2a2d33, finish: 'gloss' };
+
+// Control input: one slot per human player. steer/throttle in [-1,1], boost is
+// momentary. `input` aliases inputs[0] so all the single-player input code
+// (joystick / keyboard / tilt) keeps driving player 1.
+const inputs = [
+    { steer: 0, throttle: 0, boost: false },
+    { steer: 0, throttle: 0, boost: false }
+];
+const input = inputs[0];
 
 // Race state
 const race = {
@@ -262,7 +278,15 @@ function elevationAt(t) {
 // Scene setup (renderer/camera built once; scene rebuilt per track)
 // ------------------------------------------------------------
 function initRenderer() {
-    camera = new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.1, 2000);
+    // One chase camera per possible human player. Each tracks its own smoothed
+    // FOV in `_fov` so a boosting player widening their view doesn't affect the
+    // other half of the split screen.
+    cameras = [
+        new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.1, 2000),
+        new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.1, 2000)
+    ];
+    cameras.forEach(c => { c._fov = BASE_FOV; });
+    camera = cameras[0];
 
     const container = document.getElementById('gameContainer');
     renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -1312,13 +1336,30 @@ function makeRacer(opts) {
 
 function buildRacers() {
     racers = [];
+    players = [];
+
+    // Player 1 uses the customised garage car.
     player = makeRacer({
         color: profile.bodyColor, reactorColor: profile.reactorColor,
         rimColor: profile.rimColor, finish: profile.finish, isPlayer: true
     });
+    player.playerIndex = 0;
+    players.push(player);
     racers.push(player);
 
-    const aiCount = 3;
+    // Player 2 (split-screen) gets a distinct stock look.
+    if (numPlayers === 2) {
+        const p2 = makeRacer({
+            color: P2_LOOK.bodyColor, reactorColor: P2_LOOK.reactorColor,
+            rimColor: P2_LOOK.rimColor, finish: P2_LOOK.finish, isPlayer: true
+        });
+        p2.playerIndex = 1;
+        players.push(p2);
+        racers.push(p2);
+    }
+
+    // Keep the grid at four cars total: fewer AI when a second human joins.
+    const aiCount = numPlayers === 2 ? 2 : 3;
     for (let i = 0; i < aiCount; i++) {
         racers.push(makeRacer({
             color: AI_COLORS[i % AI_COLORS.length],
@@ -1354,7 +1395,7 @@ function placeRacersAtStart() {
         r.mesh.rotation.set(0, heading, 0);
     });
 
-    positionCamera(true);
+    positionCameras(true);
     setHudVisible(true);
 }
 
@@ -1662,27 +1703,34 @@ function handleCollisions() {
 // ------------------------------------------------------------
 // Camera follows the player
 // ------------------------------------------------------------
-function positionCamera(snap) {
-    const cam = CAMERA_MODES[profile.cameraMode] || CAMERA_MODES.normal;
-    const fx = Math.sin(player.heading), fz = Math.cos(player.heading);
+// Place one chase camera behind its player. Each camera keeps its own
+// smoothed FOV (cam._fov) so split-screen halves stay independent.
+function positionCamera(p, cam, snap) {
+    const m = CAMERA_MODES[profile.cameraMode] || CAMERA_MODES.normal;
+    const fx = Math.sin(p.heading), fz = Math.cos(p.heading);
     const dest = new THREE.Vector3(
-        player.x - fx * cam.back,
-        cam.height + player.y,
-        player.z - fz * cam.back
+        p.x - fx * m.back,
+        m.height + p.y,
+        p.z - fz * m.back
     );
-    if (snap) { camera.position.copy(dest); _currentFov = BASE_FOV; }
-    else camera.position.lerp(dest, 0.12);
+    if (snap) { cam.position.copy(dest); cam._fov = BASE_FOV; }
+    else cam.position.lerp(dest, 0.12);
 
-    camera.lookAt(player.x + fx * cam.ahead, 1 + player.y, player.z + fz * cam.ahead);
+    cam.lookAt(p.x + fx * m.ahead, 1 + p.y, p.z + fz * m.ahead);
 
     // Dynamic FOV: widens at high speed
-    const spd = Math.abs(player.speed);
+    const spd = Math.abs(p.speed);
     const targetFov = BASE_FOV + (MAX_FOV - BASE_FOV) * clamp(spd / 1.4, 0, 1);
-    _currentFov += (targetFov - _currentFov) * 0.08;
-    if (Math.abs(_currentFov - camera.fov) > 0.1) {
-        camera.fov = _currentFov;
-        camera.updateProjectionMatrix();
+    cam._fov += (targetFov - cam._fov) * 0.08;
+    if (Math.abs(cam._fov - cam.fov) > 0.1) {
+        cam.fov = cam._fov;
+        cam.updateProjectionMatrix();
     }
+}
+
+// Update every active player's chase camera.
+function positionCameras(snap) {
+    players.forEach((p, i) => positionCamera(p, cameras[i], snap));
 }
 
 // ------------------------------------------------------------
@@ -1696,9 +1744,10 @@ function update() {
     racers.forEach(r => {
         let ctrl;
         if (r.isPlayer) {
+            const inp = inputs[r.playerIndex] || inputs[0];
             // _autopilot: console/testing hook — AI drives the player car.
             ctrl = window._autopilot ? aiControl(r)
-                 : { steer: input.steer, throttle: input.throttle, boost: input.boost };
+                 : { steer: inp.steer, throttle: inp.throttle, boost: inp.boost };
         } else {
             ctrl = race.started ? aiControl(r) : { steer: 0, throttle: 0, boost: false };
         }
@@ -1706,7 +1755,7 @@ function update() {
         stepRacer(r, ctrl);
     });
 
-    input.boost = false; // momentary: consumed each frame
+    inputs.forEach(i => { i.boost = false; }); // momentary: consumed each frame
 
     handleCollisions();
 
@@ -1716,11 +1765,12 @@ function update() {
         applyTransform(r, r._lastSteer || 0);
     });
 
-    positionCamera(false);
+    positionCameras(false);
 
     if (race.started && !race.finished) {
         race.elapsed = (performance.now() - race.startTime) / 1000;
-        if (player.finished) finishRace();
+        // The race ends once every human player has crossed the line.
+        if (players.every(p => p.finished)) finishRace();
     }
     updateHUD();
 }
@@ -1753,9 +1803,30 @@ function animate() {
 
     updateParticles();
     updateAtmosphere();
-    renderer.render(scene, camera);
+    renderScene();
     drawMinimap();
     updateFps();
+}
+
+// Render the scene once per player. In split-screen the viewport+scissor pair
+// confines each camera to its half of the canvas (left = P1, right = P2).
+function renderScene() {
+    const w = window.innerWidth, h = window.innerHeight;
+    if (numPlayers === 2) {
+        renderer.setScissorTest(true);
+        // Left half — player 1
+        renderer.setViewport(0, 0, w / 2, h);
+        renderer.setScissor(0, 0, w / 2, h);
+        renderer.render(scene, cameras[0]);
+        // Right half — player 2
+        renderer.setViewport(w / 2, 0, w / 2, h);
+        renderer.setScissor(w / 2, 0, w / 2, h);
+        renderer.render(scene, cameras[1]);
+        renderer.setScissorTest(false);
+    } else {
+        renderer.setViewport(0, 0, w, h);
+        renderer.render(scene, cameras[0]);
+    }
 }
 
 // ------------------------------------------------------------
@@ -1776,9 +1847,15 @@ function formatTimeSec(sec) {
     return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-function playerPosition() {
+// Finishing place (1-based) of a given racer in the current standings.
+function placeOf(r) {
     const sorted = [...racers].sort((a, b) => raceScore(b) - raceScore(a));
-    return sorted.indexOf(player) + 1;
+    return sorted.indexOf(r) + 1;
+}
+function playerPosition() { return placeOf(player); }
+
+function ordinalOf(place) {
+    return ['', '1st', '2nd', '3rd', '4th', '5th', '6th'][place] || (place + 'th');
 }
 
 // Speed display tuning: maps internal speed units to a fast-feeling MPH, and
@@ -1786,7 +1863,38 @@ function playerPosition() {
 const SPEED_MPH = 215;
 const SPEED_BAR_MAX = 1.6;
 
+// Per-player split-screen HUD: compact POS / LAP / SPEED / boost readout
+// pinned to the top of each viewport half.
+const splitHudEls = [
+    { pos: 'sp1Pos', lap: 'sp1Lap', spd: 'sp1Spd', boost: 'sp1Boost' },
+    { pos: 'sp2Pos', lap: 'sp2Lap', spd: 'sp2Spd', boost: 'sp2Boost' }
+].map(ids => ({
+    pos: document.getElementById(ids.pos),
+    lap: document.getElementById(ids.lap),
+    spd: document.getElementById(ids.spd),
+    boost: document.getElementById(ids.boost)
+}));
+
+function updateSplitHUD() {
+    if (finishGateBanner) {
+        finishGateBanner.visible = players.some(p => p.lap >= TOTAL_LAPS && !p.finished);
+    }
+    players.forEach((p, i) => {
+        const el = splitHudEls[i];
+        if (!el || !el.pos) return;
+        el.pos.textContent = `${placeOf(p)}/${racers.length}`;
+        el.lap.textContent = `${Math.min(p.lap, TOTAL_LAPS)}/${TOTAL_LAPS}`;
+        el.spd.textContent = Math.round(Math.abs(p.speed) * SPEED_MPH);
+        if (el.boost) {
+            el.boost.style.width = `${Math.round(p.boostCharge * 100)}%`;
+            el.boost.classList.toggle('ready', p.boostCharge >= 1);
+        }
+    });
+}
+
 function updateHUD() {
+    if (numPlayers === 2) { updateSplitHUD(); return; }
+
     if (finishGateBanner && player) finishGateBanner.visible = (player.lap >= TOTAL_LAPS && !player.finished);
 
     hud.pos.textContent = `${playerPosition()}/${racers.length}`;
@@ -1974,21 +2082,51 @@ function finishRacer(r, now) {
 function finishRace() {
     race.finished = true;
     recordResult();
-    const place = player.finishOrder || playerPosition();
-    const ord = ['', '1st', '2nd', '3rd', '4th', '5th', '6th'][place] || (place + 'th');
     setHudVisible(false);
-    document.getElementById('finishOrd').textContent = ord;
+    const ordEl = document.getElementById('finishOrd');
+    if (numPlayers === 2) {
+        // Show both placements; highlight whoever beat the other.
+        const ords = players.map(p => ordinalOf(p.finishOrder || placeOf(p)));
+        const p1won = (players[0].finishOrder || placeOf(players[0])) <
+                      (players[1].finishOrder || placeOf(players[1]));
+        ordEl.innerHTML =
+            `<span class="fin-p${p1won ? ' fin-win' : ''}">P1 ${ords[0]}</span>` +
+            `<span class="fin-p${!p1won ? ' fin-win' : ''}">P2 ${ords[1]}</span>`;
+    } else {
+        const place = player.finishOrder || playerPosition();
+        ordEl.textContent = ordinalOf(place);
+    }
     document.getElementById('finishOverlay').classList.add('show');
     waitForRestart();
 }
 
 function setHudVisible(on) {
-    ['speedHud', 'abilities', 'joystick', 'menuBtn'].forEach(id => {
+    const two = numPlayers === 2;
+    // Re-centres the settings button onto the divider so it clears the P2 HUD.
+    document.body.classList.toggle('splitscreen', on && two);
+    const show = (id, vis) => {
         const el = document.getElementById(id);
-        if (el) el.style.visibility = on ? '' : 'hidden';
-    });
+        if (el) el.style.visibility = vis ? '' : 'hidden';
+    };
+
+    // Touch controls + the single-player speed HUD only apply in 1-player mode;
+    // split-screen players use physical controllers.
+    show('speedHud', on && !two);
+    show('abilities', on && !two);
+    show('joystick', on && !two);
+    show('menuBtn', on);
+
+    // Split-screen per-player HUD + the divider between the two views. These
+    // default to hidden in CSS, so show them explicitly (not via '').
+    const showV = (id, vis) => {
+        const el = document.getElementById(id);
+        if (el) el.style.visibility = vis ? 'visible' : 'hidden';
+    };
+    showV('splitHud', on && two);
+    showV('splitDivider', on && two);
+
     const mm = document.getElementById('minimap');
-    if (mm) mm.style.visibility = (on && profile.showMinimap !== false) ? '' : 'hidden';
+    if (mm) mm.style.visibility = (on && !two && profile.showMinimap !== false) ? '' : 'hidden';
     if (on) document.getElementById('finishOverlay').classList.remove('show');
 }
 
@@ -2340,9 +2478,10 @@ function applySettings() {
     const topInfo = document.getElementById('topInfo');
     if (topInfo) topInfo.style.display = profile.showDebugInfo ? 'flex' : 'none';
 
-    // Minimap visibility (respected by setHudVisible when race ends)
+    // Minimap visibility (respected by setHudVisible when race ends). The
+    // single shared minimap is suppressed in split-screen.
     const mm = document.getElementById('minimap');
-    if (mm) mm.style.visibility = profile.showMinimap !== false ? '' : 'hidden';
+    if (mm) mm.style.visibility = (profile.showMinimap !== false && numPlayers !== 2) ? '' : 'hidden';
 
     // Laps
     TOTAL_LAPS = profile.totalLaps || 3;
@@ -2420,7 +2559,9 @@ if (minimapToggleBtn) {
     });
 }
 
-[['playBtn', () => startTrack(currentTrackIndex)], ['garageBtn', showGarage],
+[['playBtn', () => { numPlayers = 1; startTrack(currentTrackIndex); }],
+ ['twoPlayerBtn', () => { numPlayers = 2; startTrack(currentTrackIndex); }],
+ ['garageBtn', showGarage],
  ['garageBackBtn', showHome], ['menuBackBtn', showHome]].forEach(([id, fn]) => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); fn(); });
@@ -2434,8 +2575,9 @@ function handleResize() {
     if (!renderer || !camera) return;
     const w = window.innerWidth, h = window.innerHeight;
     renderer.setSize(w, h);
-    camera.aspect = w / h;
-    camera.updateProjectionMatrix();
+    // Split-screen halves are w/2 wide; single player uses the full width.
+    const aspect = numPlayers === 2 ? (w / 2) / h : w / h;
+    cameras.forEach(c => { c.aspect = aspect; c.updateProjectionMatrix(); });
     updateJoystickCenter();
     setupMinimap();
 }
@@ -2515,18 +2657,40 @@ if (boostBtnEl) {
 // ------------------------------------------------------------
 // Keyboard (desktop)
 // ------------------------------------------------------------
-const keys = { up: false, down: false, left: false, right: false };
-function keyboardActive() { return keys.up || keys.down || keys.left || keys.right; }
+// Two key sets: WASD + Space drive player 1, the arrow keys + Enter drive
+// player 2. In single-player both sets feed player 1 (so arrows still work).
+const keys = {
+    p1: { up: false, down: false, left: false, right: false },
+    p2: { up: false, down: false, left: false, right: false }
+};
+function setActive(s) { return s.up || s.down || s.left || s.right; }
+function keyboardActive() { return setActive(keys.p1) || setActive(keys.p2); }
+
+function applyKeysTo(s, idx) {
+    inputs[idx].throttle = (s.up ? 1 : 0) - (s.down ? 1 : 0);
+    inputs[idx].steer = (s.right ? 1 : 0) - (s.left ? 1 : 0);
+}
 
 function pollKeyboard() {
-    if (joystick.isActive) return; // touch takes priority
+    if (joystick.isActive) return; // touch takes priority (single player)
 
-    const kbThrottle = (keys.up ? 1 : 0) - (keys.down ? 1 : 0);
-    const kbSteer = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
+    if (numPlayers === 2) {
+        applyKeysTo(keys.p1, 0);
+        applyKeysTo(keys.p2, 1);
+        return; // no on-screen joystick to mirror in split-screen
+    }
+
+    // Single player: WASD and arrows both drive player 1.
+    const up = keys.p1.up || keys.p2.up;
+    const down = keys.p1.down || keys.p2.down;
+    const left = keys.p1.left || keys.p2.left;
+    const right = keys.p1.right || keys.p2.right;
+    const kbThrottle = (up ? 1 : 0) - (down ? 1 : 0);
+    const kbSteer = (right ? 1 : 0) - (left ? 1 : 0);
     input.throttle = kbThrottle;
     input.steer = kbSteer;
 
-    if (keyboardActive()) {
+    if (up || down || left || right) {
         joystick.element.classList.add('active');
         joystick.stick.style.transform =
             `translate(calc(-50% + ${kbSteer * joystick.radius}px), calc(-50% + ${-kbThrottle * joystick.radius}px))`;
@@ -2537,17 +2701,20 @@ function pollKeyboard() {
 }
 
 const keyMap = {
-    'w': 'up', 'arrowup': 'up', 's': 'down', 'arrowdown': 'down',
-    'a': 'left', 'arrowleft': 'left', 'd': 'right', 'arrowright': 'right'
+    'w': ['p1', 'up'], 's': ['p1', 'down'], 'a': ['p1', 'left'], 'd': ['p1', 'right'],
+    'arrowup': ['p2', 'up'], 'arrowdown': ['p2', 'down'],
+    'arrowleft': ['p2', 'left'], 'arrowright': ['p2', 'right']
 };
 document.addEventListener('keydown', (e) => {
-    if (e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); input.boost = true; return; }
-    const k = keyMap[e.key.toLowerCase()];
-    if (k) { e.preventDefault(); keys[k] = true; }
+    const key = e.key.toLowerCase();
+    if (key === ' ' || key === 'spacebar') { e.preventDefault(); inputs[0].boost = true; return; }
+    if (key === 'enter') { e.preventDefault(); inputs[1].boost = true; return; }
+    const m = keyMap[key];
+    if (m) { e.preventDefault(); keys[m[0]][m[1]] = true; }
 });
 document.addEventListener('keyup', (e) => {
-    const k = keyMap[e.key.toLowerCase()];
-    if (k) { e.preventDefault(); keys[k] = false; }
+    const m = keyMap[e.key.toLowerCase()];
+    if (m) { e.preventDefault(); keys[m[0]][m[1]] = false; }
 });
 
 // ------------------------------------------------------------
@@ -2555,26 +2722,27 @@ document.addEventListener('keyup', (e) => {
 // Left stick steers (and throttles: push up to accelerate, down to
 // brake/reverse). The A button fires boost.
 // ------------------------------------------------------------
-const gamepad = { index: null, boostLatch: false };
+// One boost edge-latch per player slot. Pads are assigned in connection order:
+// the first connected controller is player 1, the second is player 2.
+const gamepad = { boostLatch: [false, false] };
 const GP_DEADZONE = 0.18;
 
-window.addEventListener('gamepadconnected', (e) => { gamepad.index = e.gamepad.index; });
-window.addEventListener('gamepaddisconnected', (e) => {
-    if (gamepad.index === e.gamepad.index) gamepad.index = null;
-});
-
-function activeGamepad() {
+function connectedPads() {
     const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-    if (gamepad.index !== null && pads[gamepad.index]) return pads[gamepad.index];
-    for (const p of pads) { if (p) { gamepad.index = p.index; return p; } }
-    return null;
+    const list = [];
+    for (const p of pads) if (p) list.push(p);
+    return list;
 }
 
-function pollGamepad() {
-    if (joystick.isActive) return; // on-screen touch joystick takes priority
-    const gp = activeGamepad();
-    if (!gp) return;
+// First connected pad (used by the restart-on-any-button flow).
+function activeGamepad() {
+    const list = connectedPads();
+    return list.length ? list[0] : null;
+}
 
+// Read one pad into one player's input slot. Returns true if the stick was
+// pushed past the deadzone (so callers can tell idle from active).
+function applyGamepad(gp, idx) {
     // Left stick: axes[0] = steer (left/right), axes[1] = throttle (up = forward).
     const ax = gp.axes[0] || 0;
     const ay = gp.axes[1] || 0;
@@ -2584,17 +2752,31 @@ function pollGamepad() {
     // A button = boost. On the Switch Pro Controller's standard mapping the
     // physical A button (right face position) is button index 1.
     const aBtn = !!(gp.buttons[1] && gp.buttons[1].pressed);
-    if (aBtn && !gamepad.boostLatch) input.boost = true; // edge-triggered (one fire per press)
-    gamepad.boostLatch = aBtn;
+    if (aBtn && !gamepad.boostLatch[idx]) inputs[idx].boost = true; // edge-triggered
+    gamepad.boostLatch[idx] = aBtn;
 
-    if (steer === 0 && throttle === 0) return; // let keyboard/idle stand
-    input.steer = clamp(steer, -1, 1);
-    input.throttle = clamp(throttle, -1, 1);
+    if (steer === 0 && throttle === 0) return false; // let keyboard/idle stand
+    inputs[idx].steer = clamp(steer, -1, 1);
+    inputs[idx].throttle = clamp(throttle, -1, 1);
+    return true;
+}
 
-    // Reflect stick position on the on-screen joystick for feedback.
+function pollGamepad() {
+    const list = connectedPads();
+    if (!list.length) return;
+
+    if (numPlayers === 2) {
+        if (list[0]) applyGamepad(list[0], 0);
+        if (list[1]) applyGamepad(list[1], 1);
+        return;
+    }
+
+    // Single player: first pad drives player 1, mirrored on the touch joystick.
+    if (joystick.isActive) return; // on-screen touch joystick takes priority
+    if (!applyGamepad(list[0], 0)) return;
     joystick.element.classList.add('active');
     joystick.stick.style.transform =
-        `translate(calc(-50% + ${input.steer * joystick.radius}px), calc(-50% + ${-input.throttle * joystick.radius}px))`;
+        `translate(calc(-50% + ${inputs[0].steer * joystick.radius}px), calc(-50% + ${-inputs[0].throttle * joystick.radius}px))`;
 }
 
 // ------------------------------------------------------------
@@ -2697,6 +2879,7 @@ function applyControlScheme(fromGesture) {
 
 // Runs last in the input chain so tilt owns steering while it is live.
 function pollTilt() {
+    if (numPlayers === 2) return; // tilt steering is single-player only
     if (!tiltSteerActive()) return;
     input.steer = tilt.steer;
     // Mirror the tilt on the (idle) stick so steering stays visible.
