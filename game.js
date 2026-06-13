@@ -34,7 +34,7 @@ let trackCurve;
 let centerPoints = [];   // gameplay samples (Vector3 with elevation, closed)
 let tangents = [];       // unit tangent at each sample (horizontal)
 let SAMPLES = 0;
-const ROAD_WIDTH = 18;
+const ROAD_WIDTH = 22;
 const ROAD_HALF = ROAD_WIDTH / 2;
 let TOTAL_LAPS = 3;
 
@@ -76,6 +76,10 @@ let player = null;        // primary human (player 1); aliases players[0]
 let players = [];         // all human racers (1 or 2)
 const AI_COLORS = [0x3498db, 0x2ecc71, 0xf1c40f, 0x9b59b6, 0xe67e22];
 const CAR_RADIUS = 1.9;  // collision radius
+
+// Approx on-track terminal speed (accel / (1 - drag)). Used to shape steering:
+// the car steers a little less at top speed so fast sections stay stable.
+const TOP_SPEED = 1.1;
 
 // Player 2's car look (distinct from the customised player-1 car so the two
 // are easy to tell apart on the split screen).
@@ -126,7 +130,7 @@ const hud = {
 };
 
 // Patch / build number shown top-left. Bump this with each gameplay update.
-const VERSION = 'v1.14.2';
+const VERSION = 'v1.15.0';
 if (hud.build) hud.build.textContent = VERSION;
 
 // Live FPS, averaged over a short window so the readout is steady.
@@ -453,7 +457,8 @@ function buildTrack() {
         tunnelClamp = {
             i0: Math.floor(currentTrack.tunnel.from * SAMPLES),
             i1: Math.floor(currentTrack.tunnel.to * SAMPLES),
-            lim: 7.6
+            // Scale with the road so the tunnel is as forgiving as open track.
+            lim: ROAD_HALF - 0.5
         };
     }
 
@@ -982,7 +987,8 @@ function buildGlassTunnel() {
     if (!spec) return;
     const i0 = Math.floor(spec.from * SAMPLES);
     const i1 = Math.floor(spec.to * SAMPLES);
-    const R = spec.radius, LIFT = spec.lift, SEG = 18, STEP = 2;
+    // Tube must be at least wide enough to enclose the (now wider) road.
+    const R = Math.max(spec.radius, ROAD_HALF + 2), LIFT = spec.lift, SEG = 18, STEP = 2;
 
     // Ring frames along the centreline, tilted with the full 3D tangent so
     // the tube bends smoothly through the dive and the final ascent.
@@ -1324,9 +1330,10 @@ function makeRacer(opts) {
         accel: 0.011, brakePower: 0.024, reverseAccel: 0.008,
         baseThrottle: 0.45,              // fraction of top speed with stick centred
         drag: 0.99, offTrackDrag: 0.965,
-        grip: 0.82, offTrackGrip: 0.9,   // fraction of sideways velocity kept (higher = more slide)
+        grip: 0.40, offTrackGrip: 0.80,  // fraction of sideways velocity kept (lower = more planted, less drift)
         maxSpeed: 0.82, offTrackMaxSpeed: 0.6,
-        turnRate: 0.039,
+        turnRate: 0.046,
+        steerSmooth: 0,                  // eased steering input (anti-twitch)
         // ai
         skill: opts.skill || 1,
         lookahead: opts.lookahead || 16,
@@ -1476,9 +1483,16 @@ function stepRacer(r, ctrl) {
             r.vx += fX * 0.02; r.vz += fZ * 0.02;
         }
 
-        const speedFactor = Math.min(speed / 0.25, 1);
+        // --- Steering (planted arcade model) -----------------------------
+        // Ease the raw stick so taps/jitter don't snap the car, then shape the
+        // turn rate by speed: you can't pivot when nearly stopped, and steering
+        // softens toward top speed so fast straights/sweepers stay stable. The
+        // car stays agile through the mid-speed range where most racing happens.
+        r.steerSmooth = lerpN(r.steerSmooth, ctrl.steer, 0.45);
+        const lowSpeedRamp  = Math.min(speed / 0.25, 1);
+        const highSpeedDamp = 1 - 0.18 * clamp(speed / TOP_SPEED, 0, 1);
         const dir = fwd >= 0 ? 1 : -1;
-        r.heading -= ctrl.steer * r.turnRate * speedFactor * dir;
+        r.heading -= r.steerSmooth * r.turnRate * lowSpeedRamp * highSpeedDamp * dir;
     } else if (r.finished) {
         r.vx *= 0.92; r.vz *= 0.92;
     }
@@ -1488,7 +1502,11 @@ function stepRacer(r, ctrl) {
         r.boostCharge = Math.min(1, r.boostCharge + BOOST_REGEN);
     }
 
-    // Grip: keep forward velocity, bleed off sideways velocity.
+    // Grip = how fast the car's momentum realigns with where it's pointed.
+    // We keep the forward component and bleed the sideways (drift) component;
+    // a LOW kept-fraction means the car quickly goes where it's aimed instead
+    // of sliding wide, which is what keeps players on the track. Off-track grip
+    // is deliberately looser so leaving the road is still penalised.
     const f2X = Math.sin(r.heading), f2Z = Math.cos(r.heading);
     fwd = r.vx * f2X + r.vz * f2Z;
     const latX = r.vx - f2X * fwd, latZ = r.vz - f2Z * fwd;
@@ -1637,7 +1655,7 @@ function aiControl(r) {
     while (diff < -Math.PI) diff += Math.PI * 2;
 
     const sharp = Math.abs(diff);
-    const targetSpeed = r.maxSpeed * r.skill * (1 - Math.min(sharp * 1.4, 0.55));
+    const targetSpeed = r.maxSpeed * r.skill * (1 - Math.min(sharp * 1.8, 0.65));
 
     const ctrl = { steer: 0, throttle: 0, boost: false };
     if (r.speed < targetSpeed - 0.02) ctrl.throttle = 1;
