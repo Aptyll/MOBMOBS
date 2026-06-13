@@ -13,7 +13,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,500;0,600;0,700;1,500;1,600;1,700&family=Barlow:ital,wght@0,400;0,500;0,600;0,700;0,800;1,700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=1.17.0">
+    <link rel="stylesheet" href="style.css?v=1.18.0">
 </head>
 <body>
     <div id="gameContainer"></div>
@@ -128,9 +128,28 @@
             </div>
 
             <div class="home-actions">
-                <button class="btn-primary" id="playBtn">1 PLAYER</button>
-                <button class="btn-primary" id="twoPlayerBtn">2 PLAYERS</button>
-                <button class="btn-primary" id="sumoBtn">SUMO</button>
+                <div class="mode-group">
+                    <span class="mode-label">Race</span>
+                    <div class="mode-row">
+                        <button class="btn-primary mode-btn" id="playBtn">
+                            <span class="mb-title">Solo</span><span class="mb-sub">vs AI</span>
+                        </button>
+                        <button class="btn-primary mode-btn" id="twoPlayerBtn">
+                            <span class="mb-title">2 Players</span><span class="mb-sub">Split-screen</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="mode-group">
+                    <span class="mode-label">Sumo</span>
+                    <div class="mode-row">
+                        <button class="btn-primary mode-btn" id="sumoAiBtn">
+                            <span class="mb-title">Vs AI</span><span class="mb-sub">4-Player FFA</span>
+                        </button>
+                        <button class="btn-primary mode-btn" id="sumoBtn">
+                            <span class="mb-title">2 Players</span><span class="mb-sub">Split-screen</span>
+                        </button>
+                    </div>
+                </div>
                 <button class="btn-secondary" id="garageBtn">GARAGE</button>
             </div>
         </div>
@@ -207,6 +226,6 @@
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="game.js?v=1.17.0"></script>
+    <script src="game.js?v=1.18.0"></script>
 </body>
 </html>

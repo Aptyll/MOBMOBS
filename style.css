@@ -535,6 +535,46 @@ html, body {
     margin: 0 auto;
 }
 
+/* Mode picker: grouped Race / Sumo rows, each offering AI or local players. */
+.mode-group {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+.mode-label {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-style: italic;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    font-size: 12px;
+    color: var(--cyan);
+    padding-left: 4px;
+}
+.mode-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+.mode-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: 13px 10px;
+    line-height: 1.1;
+}
+.mode-btn .mb-title { font-size: 17px; }
+.mode-btn .mb-sub {
+    font-size: 10px;
+    font-weight: 600;
+    font-style: normal;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    opacity: 0.72;
+}
+
 .btn-primary, .btn-secondary {
     pointer-events: all;
     cursor: pointer;
@@ -921,6 +961,24 @@ body.splitscreen #menuBtn {
     border-radius: 4px;
     background: rgba(143, 168, 205, 0.18);
     overflow: hidden;
+}
+
+/* Solo FFA vs AI: no P1/P2 sides — just a centred "N LEFT" status banner. */
+body.sumo-solo #sumoHud {
+    justify-content: center;
+}
+body.sumo-solo .sumo-side {
+    display: none;
+}
+body.sumo-solo .sumo-center {
+    margin-top: 0;
+    padding: 6px 16px;
+    border-radius: 12px;
+    font-size: 17px;
+    background: rgba(11, 14, 20, 0.62);
+    border: 1px solid var(--stroke);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
 }
 
 /* ---------- Rotate hint (small, non-blocking banner) ---------- */
