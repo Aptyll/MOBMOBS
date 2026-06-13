@@ -153,7 +153,7 @@ const hud = {
 };
 
 // Patch / build number shown top-left. Bump this with each gameplay update.
-const VERSION = 'v1.16.1';
+const VERSION = 'v1.17.0';
 if (hud.build) hud.build.textContent = VERSION;
 
 // Live FPS, averaged over a short window so the readout is steady.
@@ -1786,6 +1786,23 @@ function checkBoosts(r) {
 // ------------------------------------------------------------
 // Collisions (circle vs circle)
 // ------------------------------------------------------------
+// Extra shove when you connect with the NOSE of your car. Aiming your front
+// at a rival and hitting them while driving forward rewards skillful play:
+// a clean head-on ram launches them, a glancing/side bump barely does.
+const RAM_FRONT_MIN = 0.5;   // nose-alignment cone (cos): within ~60 deg counts as "front"
+const RAM_FORCE = 0.6;       // peak bonus impulse on a dead-on, full-speed ram
+const RAM_RECOIL = 0.2;      // fraction of the bonus the rammer takes back
+
+// Ram potential of `attacker` driving toward (dx,dz). Measured from the
+// PRE-impact velocity, because the restitution below cancels it out.
+function ramPush(attacker, dx, dz) {
+    const noseOn = Math.sin(attacker.heading) * dx + Math.cos(attacker.heading) * dz;
+    if (noseOn < RAM_FRONT_MIN) return 0;
+    const fwd = Math.max(0, attacker.vx * Math.sin(attacker.heading) + attacker.vz * Math.cos(attacker.heading));
+    if (fwd < 0.05) return 0;
+    return RAM_FORCE * noseOn * Math.min(fwd, 1.2);
+}
+
 function handleCollisions() {
     const minDist = CAR_RADIUS * 2;
     const BUMP = 0.06;
@@ -1805,6 +1822,11 @@ function handleCollisions() {
             a.x -= nx * overlap; a.z -= nz * overlap;
             b.x += nx * overlap; b.z += nz * overlap;
 
+            // Front-ram bonus, captured BEFORE the base response cancels the
+            // closing velocity. Normal points a->b: A attacks along +n, B along -n.
+            const ramA = ramPush(a, nx, nz);
+            const ramB = ramPush(b, -nx, -nz);
+
             const an = a.vx * nx + a.vz * nz;
             const bn = b.vx * nx + b.vz * nz;
             if (an - bn > 0) {
@@ -1814,6 +1836,23 @@ function handleCollisions() {
             }
             a.vx -= nx * BUMP; a.vz -= nz * BUMP;
             b.vx += nx * BUMP; b.vz += nz * BUMP;
+
+            // Apply the captured ram bonuses: launch the target, recoil the rammer.
+            if (ramA > 0) {
+                b.vx += nx * ramA; b.vz += nz * ramA;
+                a.vx -= nx * ramA * RAM_RECOIL; a.vz -= nz * ramA * RAM_RECOIL;
+            }
+            if (ramB > 0) {
+                a.vx -= nx * ramB; a.vz -= nz * ramB;
+                b.vx += nx * ramB * RAM_RECOIL; b.vz += nz * ramB * RAM_RECOIL;
+            }
+
+            // Impact spark at the contact point for the stronger hit.
+            if (Math.max(ramA, ramB) > 0.22 && typeof fxFlame === 'function') {
+                const cxp = (a.x + b.x) / 2, cyp = (a.y + b.y) / 2 + 0.8, czp = (a.z + b.z) / 2;
+                fxFlame(cxp, cyp, czp, 0);
+                fxFlame(cxp, cyp, czp, Math.PI);
+            }
         }
     }
 }
