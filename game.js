@@ -126,7 +126,7 @@ const hud = {
 };
 
 // Patch / build number shown top-left. Bump this with each gameplay update.
-const VERSION = 'v1.13.1';
+const VERSION = 'v1.14.0';
 if (hud.build) hud.build.textContent = VERSION;
 
 // Live FPS, averaged over a short window so the readout is steady.
