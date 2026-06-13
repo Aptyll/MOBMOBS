@@ -34,7 +34,7 @@ let trackCurve;
 let centerPoints = [];   // gameplay samples (Vector3 with elevation, closed)
 let tangents = [];       // unit tangent at each sample (horizontal)
 let SAMPLES = 0;
-const ROAD_WIDTH = 14;
+const ROAD_WIDTH = 18;
 const ROAD_HALF = ROAD_WIDTH / 2;
 let TOTAL_LAPS = 3;
 
@@ -126,7 +126,7 @@ const hud = {
 };
 
 // Patch / build number shown top-left. Bump this with each gameplay update.
-const VERSION = 'v1.14.1';
+const VERSION = 'v1.14.2';
 if (hud.build) hud.build.textContent = VERSION;
 
 // Live FPS, averaged over a short window so the readout is steady.
@@ -1321,12 +1321,12 @@ function makeRacer(opts) {
         boostCharge: 0,
         bestLap: null, lapStartTime: 0,
         // physics tuning (velocity-vector model = momentum + drift)
-        accel: 0.013, brakePower: 0.024, reverseAccel: 0.008,
+        accel: 0.011, brakePower: 0.024, reverseAccel: 0.008,
         baseThrottle: 0.45,              // fraction of top speed with stick centred
         drag: 0.99, offTrackDrag: 0.965,
         grip: 0.82, offTrackGrip: 0.9,   // fraction of sideways velocity kept (higher = more slide)
-        maxSpeed: 0.95, offTrackMaxSpeed: 0.6,
-        turnRate: 0.045,
+        maxSpeed: 0.82, offTrackMaxSpeed: 0.6,
+        turnRate: 0.039,
         // ai
         skill: opts.skill || 1,
         lookahead: opts.lookahead || 16,
