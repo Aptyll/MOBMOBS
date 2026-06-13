@@ -126,7 +126,7 @@ const hud = {
 };
 
 // Patch / build number shown top-left. Bump this with each gameplay update.
-const VERSION = 'v1.14.0';
+const VERSION = 'v1.14.1';
 if (hud.build) hud.build.textContent = VERSION;
 
 // Live FPS, averaged over a short window so the readout is steady.
@@ -2248,7 +2248,8 @@ const DEFAULT_PROFILE = {
     showMinimap: true,
     cameraMode: 'normal',
     controlScheme: 'joystick',   // 'joystick' | 'tilt'
-    totalLaps: 3
+    totalLaps: 3,
+    perfMode: false              // drops pixel ratio + shadows for screencasting
 };
 const BODY_COLORS = [
     0xe53935, 0xff8f00, 0xfdd835, 0x43a047, 0x00acc1, 0x1e88e5,
@@ -2486,9 +2487,21 @@ function applySettings() {
     // Laps
     TOTAL_LAPS = profile.totalLaps || 3;
 
+    // Performance mode: lower pixel ratio + disable shadows for screencasting.
+    // Takes effect immediately — no scene rebuild needed.
+    if (renderer) {
+        const perf = !!profile.perfMode;
+        renderer.setPixelRatio(perf ? 1 : Math.min(window.devicePixelRatio, 2));
+        renderer.shadowMap.enabled = !perf;
+        if (perf) renderer.shadowMap.needsUpdate = true;
+        const w = window.innerWidth, h = window.innerHeight;
+        renderer.setSize(w, h); // re-commit the new pixel ratio
+    }
+
     // Sync toggle buttons
     setToggleBtn('debugToggle', !!profile.showDebugInfo);
     setToggleBtn('minimapToggle', profile.showMinimap !== false);
+    setToggleBtn('perfToggle', !!profile.perfMode);
 }
 
 function buildSegControl(containerId, values, labels, profileKey, onChange) {
@@ -2555,6 +2568,15 @@ if (minimapToggleBtn) {
     minimapToggleBtn.addEventListener('pointerdown', (e) => {
         e.preventDefault(); e.stopPropagation();
         profile.showMinimap = !(profile.showMinimap !== false);
+        saveProfile(); applySettings();
+    });
+}
+
+const perfToggleBtn = document.getElementById('perfToggle');
+if (perfToggleBtn) {
+    perfToggleBtn.addEventListener('pointerdown', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        profile.perfMode = !profile.perfMode;
         saveProfile(); applySettings();
     });
 }
