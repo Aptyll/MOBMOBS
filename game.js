@@ -29,6 +29,18 @@ let scene, camera, renderer;
 let numPlayers = 1;
 let cameras = [];
 
+// Active game mode: 'race' (track racing) or 'sumo' (arena push-off).
+let gameMode = 'race';
+
+// Sumo arena state. Two players battle on a shrinking disc; last one on wins.
+const sumo = {
+    started: false, over: false,
+    startRadius: 42, minRadius: 11, radius: 42,
+    shrink: (42 - 11) / (40 * 60),   // shrink to minimum over ~40s
+    platform: null, rim: null, baseR: 42,
+    score: [0, 0]
+};
+
 // Track data
 let trackCurve;
 let centerPoints = [];   // gameplay samples (Vector3 with elevation, closed)
@@ -65,6 +77,15 @@ let boostPads = [];      // { x, z, mesh }
 const BOOST_FRAMES = 100; // duration of a boost (pad or manual)
 const BOOST_RADIUS = 5;   // pickup distance
 const BOOST_REGEN = 1 / (60 * 7);    // full charge in ~7 seconds
+
+// PULSE ability (replaces boost): a radial shockwave that shoves nearby cars
+// away and gives the caster a short forward dash. Charge/regen reuse the boost
+// values. Expanding-ring visuals live in pulseRings.
+const PULSE_RADIUS = 12;        // shove reach (world units)
+const PULSE_FORCE_RACE = 0.34;  // shove impulse in racing
+const PULSE_FORCE_SUMO = 0.80;  // stronger shove in sumo (push them off!)
+const PULSE_SELF_SUMO = 22;     // shorter self-dash in sumo (avoid self-ejection)
+let pulseRings = [];     // { mesh, life }
 
 // Ramps (jumps)
 let ramps = [];          // { x, z, tx, tz, rx, rz, L, H, halfW, baseY }
@@ -130,7 +151,7 @@ const hud = {
 };
 
 // Patch / build number shown top-left. Bump this with each gameplay update.
-const VERSION = 'v1.15.0';
+const VERSION = 'v1.16.0';
 if (hud.build) hud.build.textContent = VERSION;
 
 // Live FPS, averaged over a short window so the readout is steady.
@@ -1323,6 +1344,7 @@ function makeRacer(opts) {
         vx: 0, vz: 0, vy: 0, airborne: false, inFlight: false,
         lap: 1, progress: 0, lastProgress: 0, lastIndex: 0,
         finished: false, finishTime: null, finishOrder: 0,
+        falling: false, eliminated: false,   // sumo: off-platform / knocked out
         boostTime: 0,
         boostCharge: 0,
         bestLap: null, lapStartTime: 0,
@@ -1448,6 +1470,30 @@ function raceScore(r) {
 }
 
 // ------------------------------------------------------------
+// PULSE ability: radial shockwave that shoves nearby cars away from the
+// caster (falls off with distance) plus a short forward dash for the caster.
+// Works in both modes — disrupts rivals in racing, pushes them off in sumo.
+// ------------------------------------------------------------
+function firePulse(caster) {
+    const sumoMode = gameMode === 'sumo';
+    caster.boostTime = sumoMode ? PULSE_SELF_SUMO : BOOST_FRAMES;
+    caster.boostCharge = 0;
+    const force = sumoMode ? PULSE_FORCE_SUMO : PULSE_FORCE_RACE;
+    for (const o of racers) {
+        if (o === caster || o.eliminated) continue;
+        if (Math.abs(o.y - caster.y) > 4) continue;   // not the car flying overhead
+        const dx = o.x - caster.x, dz = o.z - caster.z;
+        const d = Math.hypot(dx, dz);
+        if (d > 0 && d < PULSE_RADIUS) {
+            const k = force * (1 - d / PULSE_RADIUS);  // stronger up close
+            o.vx += (dx / d) * k;
+            o.vz += (dz / d) * k;
+        }
+    }
+    spawnPulseRing(caster);
+}
+
+// ------------------------------------------------------------
 // Physics step
 // ------------------------------------------------------------
 function stepRacer(r, ctrl) {
@@ -1472,11 +1518,8 @@ function stepRacer(r, ctrl) {
             r.vx -= fX * f * b; r.vz -= fZ * f * b;
         }
 
-        // Boost: fire at any time, resets charge.
-        if (ctrl.boost && r.boostTime <= 0) {
-            r.boostTime = BOOST_FRAMES;
-            r.boostCharge = 0;
-        }
+        // PULSE: shove nearby cars + a forward dash. Fires when charged.
+        if (ctrl.boost && r.boostTime <= 0 && r.boostCharge >= 1) firePulse(r);
 
         if (r.boostTime > 0) {
             r.boostTime--;
@@ -1582,6 +1625,58 @@ function stepRacer(r, ctrl) {
     }
 
     r.speed = fwd; // forward speed, used by HUD + AI
+}
+
+// Sumo physics: free driving on a flat disc (no track). Same planted-arcade
+// feel as racing, but instead of an off-track penalty the car simply falls
+// once it leaves the platform edge and is eliminated when it drops away.
+function stepSumoRacer(r, ctrl) {
+    const fX = Math.sin(r.heading), fZ = Math.cos(r.heading);
+    let speed = Math.hypot(r.vx, r.vz);
+    let fwd = r.vx * fX + r.vz * fZ;
+    const rawTh = clamp(ctrl.throttle || 0, -1, 1);
+
+    if (sumo.started && !r.falling) {
+        if (rawTh >= 0) {
+            r.vx += fX * r.accel; r.vz += fZ * r.accel;
+        } else {
+            const f = (fwd > 0.02) ? r.brakePower : r.reverseAccel;
+            r.vx -= fX * f * (-rawTh); r.vz -= fZ * f * (-rawTh);
+        }
+
+        if (ctrl.boost && r.boostTime <= 0 && r.boostCharge >= 1) firePulse(r);
+        if (r.boostTime > 0) { r.boostTime--; r.vx += fX * 0.02; r.vz += fZ * 0.02; }
+
+        r.steerSmooth = lerpN(r.steerSmooth, ctrl.steer, 0.45);
+        const lowSpeedRamp = Math.min(speed / 0.25, 1);
+        const dir = fwd >= 0 ? 1 : -1;
+        r.heading -= r.steerSmooth * r.turnRate * lowSpeedRamp * dir;
+
+        r.boostCharge = Math.min(1, r.boostCharge + BOOST_REGEN);
+    }
+
+    // Grip + drag. While falling the car is in free air: keep momentum.
+    const f2X = Math.sin(r.heading), f2Z = Math.cos(r.heading);
+    fwd = r.vx * f2X + r.vz * f2Z;
+    const latX = r.vx - f2X * fwd, latZ = r.vz - f2Z * fwd;
+    const grip = r.falling ? 0.99 : r.grip;
+    r.vx = f2X * fwd + latX * grip;
+    r.vz = f2Z * fwd + latZ * grip;
+    const drag = r.falling ? 0.999 : r.drag;
+    r.vx *= drag; r.vz *= drag;
+
+    r.x += r.vx; r.z += r.vz;
+
+    // Vertical: supported while over the disc; otherwise tip over the edge.
+    if (Math.hypot(r.x, r.z) > sumo.radius) r.falling = true;
+    if (r.falling) {
+        r.vy -= GRAVITY * 1.5;
+        r.y += r.vy;
+        if (r.y < -14) r.eliminated = true;
+    } else {
+        r.y = 0; r.vy = 0;
+    }
+    r.speed = fwd;
 }
 
 function applyTransform(r, ctrlSteer) {
@@ -1755,6 +1850,8 @@ function positionCameras(snap) {
 // Main update
 // ------------------------------------------------------------
 function update() {
+    if (gameMode === 'sumo') { updateSumo(); return; }
+
     pollKeyboard();
     pollGamepad();
     pollTilt();
@@ -1820,6 +1917,7 @@ function animate() {
     if (steps === MAX_SUBSTEPS) _accum = 0; // dropped frames: don't spiral
 
     updateParticles();
+    updatePulses();
     updateAtmosphere();
     renderScene();
     drawMinimap();
@@ -1830,6 +1928,11 @@ function animate() {
 // confines each camera to its half of the canvas (left = P1, right = P2).
 function renderScene() {
     const w = window.innerWidth, h = window.innerHeight;
+    if (gameMode === 'sumo') {            // single shared camera over the arena
+        renderer.setViewport(0, 0, w, h);
+        renderer.render(scene, cameras[0]);
+        return;
+    }
     if (numPlayers === 2) {
         renderer.setScissorTest(true);
         // Left half — player 1
@@ -1967,6 +2070,7 @@ function setupMinimap() {
 }
 
 function drawMinimap() {
+    if (gameMode === 'sumo') return;     // no track minimap in the arena
     const mm = minimap;
     if (!mm.ctx || !mm.ready || !centerPoints.length) return;
     const player = racers.find(r => r.isPlayer);
@@ -2065,7 +2169,8 @@ function hideCenter() { hud.center.classList.remove('show'); }
 // ------------------------------------------------------------
 let finishCounter = 0;
 
-function startCountdown() {
+function startCountdown(onGo) {
+    const go = onGo || beginRace;
     const steps = ['3', '2', '1'];
     let i = 0;
     const tick = () => {
@@ -2075,7 +2180,7 @@ function startCountdown() {
             setTimeout(tick, 1000);
         } else {
             showCenter('<span style="color:#3DDC84">GO!</span>', false);
-            beginRace();
+            go();
         }
     };
     tick();
@@ -2142,6 +2247,7 @@ function setHudVisible(on) {
     };
     showV('splitHud', on && two);
     showV('splitDivider', on && two);
+    showV('sumoHud', false);   // sumo HUD never shows during a race
 
     const mm = document.getElementById('minimap');
     if (mm) mm.style.visibility = (on && !two && profile.showMinimap !== false) ? '' : 'hidden';
@@ -2156,7 +2262,7 @@ function waitForRestart() {
         document.removeEventListener('pointerdown', restart);
         document.removeEventListener('keydown', restart);
         if (waitForRestart._pollId) { clearInterval(waitForRestart._pollId); waitForRestart._pollId = null; }
-        resetRace();
+        if (gameMode === 'sumo') resetSumo(); else resetRace();
     };
     waitForRestart._restart = restart;
     setTimeout(() => {
@@ -2187,6 +2293,216 @@ function resetRace() {
     startTrack(next);
 }
 
+// ============================================================
+// SUMO MODE — two players on a shrinking disc; push the other off.
+// ============================================================
+function buildSumoScene() {
+    disposeScene();
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0a0e1a);
+    scene.fog = new THREE.Fog(0x0a0e1a, 80, 240);
+    _atmo.active = false;
+    boostPads = []; ramps = []; pulseRings = [];
+    centerPoints = []; tangents = []; gapFlags = [];
+    leapState = null; tunnelClamp = null; finishGateBanner = null;
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+    const sun = new THREE.DirectionalLight(0xffffff, 0.95);
+    sun.position.set(30, 90, 40);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(1024, 1024);
+    const d = 80;
+    sun.shadow.camera.left = -d; sun.shadow.camera.right = d;
+    sun.shadow.camera.top = d; sun.shadow.camera.bottom = -d;
+    sun.shadow.camera.far = 300;
+    scene.add(sun);
+
+    // Platform disc (built at full size, scaled down as the arena shrinks).
+    const baseR = sumo.startRadius;
+    sumo.baseR = baseR;
+    const disc = new THREE.Mesh(
+        new THREE.CylinderGeometry(baseR, baseR * 0.9, 4, 64),
+        new THREE.MeshPhongMaterial({ color: 0x243349, shininess: 30 })
+    );
+    disc.position.y = -2;            // height 4, centred at -2 -> top at y=0
+    disc.receiveShadow = true;
+    scene.add(disc);
+    sumo.platform = disc;
+
+    // Bright danger rim around the edge.
+    const rim = new THREE.Mesh(
+        new THREE.TorusGeometry(baseR, 0.7, 10, 80),
+        new THREE.MeshBasicMaterial({ color: 0x19D7FF })
+    );
+    rim.rotation.x = Math.PI / 2;
+    rim.position.y = 0.1;
+    scene.add(rim);
+    sumo.rim = rim;
+
+    buildSumoRacers();
+    placeSumoRacers();
+    initParticles();
+    handleResize();
+}
+
+function buildSumoRacers() {
+    racers = [];
+    players = [];
+    player = makeRacer({
+        color: profile.bodyColor, reactorColor: profile.reactorColor,
+        rimColor: profile.rimColor, finish: profile.finish, isPlayer: true
+    });
+    player.playerIndex = 0;
+    const p2 = makeRacer({
+        color: P2_LOOK.bodyColor, reactorColor: P2_LOOK.reactorColor,
+        rimColor: P2_LOOK.rimColor, finish: P2_LOOK.finish, isPlayer: true
+    });
+    p2.playerIndex = 1;
+    players.push(player, p2);
+    racers.push(player, p2);
+}
+
+function placeSumoRacers() {
+    sumo.radius = sumo.startRadius;
+    const spawn = sumo.startRadius * 0.45;
+    const set = (r, x, heading) => {
+        r.x = x; r.z = 0; r.y = 0; r.heading = heading;
+        r.vx = 0; r.vz = 0; r.vy = 0; r.speed = 0; r.steerSmooth = 0;
+        r.falling = false; r.eliminated = false; r.airborne = false; r.inFlight = false;
+        r.boostTime = 0; r.boostCharge = 0;
+        r.mesh.position.set(r.x, 0, r.z);
+        r.mesh.rotation.set(0, heading, 0);
+    };
+    set(players[0], -spawn, Math.PI / 2);   // left car faces +x
+    set(players[1],  spawn, -Math.PI / 2);  // right car faces -x
+    if (sumo.platform) sumo.platform.scale.set(1, 1, 1);
+    if (sumo.rim) sumo.rim.scale.set(1, 1, 1);
+    positionSumoCamera();
+}
+
+function positionSumoCamera() {
+    const cam = cameras[0];
+    const r = sumo.radius;
+    // Angled overhead view that tightens as the platform shrinks.
+    cam.position.set(0, r * 1.55 + 16, r * 1.25 + 16);
+    cam.lookAt(0, 0, 0);
+    if (cam.fov !== 50) { cam.fov = 50; cam.updateProjectionMatrix(); }
+}
+
+function beginSumo() {
+    sumo.started = true;
+    sumo.over = false;
+}
+
+function updateSumo() {
+    pollKeyboard();
+    pollGamepad();
+
+    if (sumo.started && sumo.radius > sumo.minRadius) {
+        sumo.radius = Math.max(sumo.minRadius, sumo.radius - sumo.shrink);
+    }
+
+    players.forEach(r => {
+        if (r.eliminated) return;
+        const inp = inputs[r.playerIndex] || inputs[0];
+        r._lastSteer = inp.steer;
+        stepSumoRacer(r, { steer: inp.steer, throttle: inp.throttle, boost: inp.boost });
+    });
+    inputs.forEach(i => { i.boost = false; });
+
+    handleCollisions();
+
+    players.forEach(r => applyTransform(r, r._lastSteer || 0));
+
+    if (sumo.platform) {
+        const s = sumo.radius / sumo.baseR;
+        sumo.platform.scale.set(s, 1, s);
+        if (sumo.rim) sumo.rim.scale.set(s, 1, s);
+    }
+
+    positionSumoCamera();
+
+    if (sumo.started && !sumo.over) {
+        const alive = players.filter(p => !p.eliminated);
+        if (alive.length <= 1) endSumoRound(alive[0]);
+    }
+    updateSumoHUD();
+}
+
+function endSumoRound(survivor) {
+    sumo.over = true;
+    sumo.started = false;
+    // If both fell at once, whoever is higher (fell less) wins.
+    let winIdx;
+    if (survivor) winIdx = survivor.playerIndex;
+    else winIdx = (players[0].y >= players[1].y) ? 0 : 1;
+    sumo.score[winIdx]++;
+
+    const ordEl = document.getElementById('finishOrd');
+    ordEl.innerHTML =
+        `<span class="fin-p fin-win">P${winIdx + 1} WINS</span>` +
+        `<span class="fin-p">P1 ${sumo.score[0]} — ${sumo.score[1]} P2</span>`;
+    setSumoHudVisible(false);
+    document.getElementById('finishOverlay').classList.add('show');
+    waitForRestart();
+}
+
+function resetSumo() {
+    document.getElementById('finishOverlay').classList.remove('show');
+    sumo.over = false;
+    placeSumoRacers();
+    setSumoHudVisible(true);
+    hideCenter();
+    startCountdown(beginSumo);
+}
+
+function startSumo() {
+    clearRestartListeners();
+    hideAllScreens();
+    gameMode = 'sumo';
+    numPlayers = 2;                 // routes both controllers / keyboards
+    sumo.started = false;
+    sumo.over = false;
+    sumo.score = [0, 0];
+    buildSumoScene();
+    setSumoHudVisible(true);
+    hideCenter();
+    startCountdown(beginSumo);
+    if (!animateStarted) { animateStarted = true; animate(); }
+}
+
+const sumoHudEls = [
+    { score: 'sumo1Score', boost: 'sumo1Boost' },
+    { score: 'sumo2Score', boost: 'sumo2Boost' }
+].map(ids => ({
+    score: document.getElementById(ids.score),
+    boost: document.getElementById(ids.boost)
+}));
+
+function updateSumoHUD() {
+    players.forEach((p, i) => {
+        const el = sumoHudEls[i];
+        if (!el || !el.boost) return;
+        el.boost.style.width = `${Math.round(p.boostCharge * 100)}%`;
+        el.boost.classList.toggle('ready', p.boostCharge >= 1);
+        if (el.score) el.score.textContent = sumo.score[i];
+    });
+    const t = document.getElementById('sumoStatus');
+    if (t) t.textContent = (sumo.radius <= sumo.minRadius + 0.5) ? 'SUDDEN DEATH' : 'SUMO';
+}
+
+function setSumoHudVisible(on) {
+    document.body.classList.remove('splitscreen');
+    const v = (id, vis) => {
+        const el = document.getElementById(id);
+        if (el) el.style.visibility = vis ? 'visible' : 'hidden';
+    };
+    ['speedHud', 'abilities', 'joystick', 'minimap', 'splitHud', 'splitDivider'].forEach(id => v(id, false));
+    v('menuBtn', on);
+    v('sumoHud', on);
+    if (on) document.getElementById('finishOverlay').classList.remove('show');
+}
+
 // ------------------------------------------------------------
 // Track loading + menu
 // ------------------------------------------------------------
@@ -2200,6 +2516,8 @@ function loadTrack(i) {
 function startTrack(i) {
     clearRestartListeners();
     hideAllScreens();
+    gameMode = 'race';
+    sumo.started = false;
     loadTrack(i);
     race.started = false;
     race.finished = false;
@@ -2235,6 +2553,7 @@ function buildMenu() {
 function showMenu() {
     clearRestartListeners();
     race.started = false;
+    sumo.started = false;
     hideCenter();
     buildSettingsPanel();
     hideAllScreens();
@@ -2339,6 +2658,7 @@ function renderProfile() {
 function showHome() {
     clearRestartListeners();
     race.started = false;
+    sumo.started = false;
     hideCenter();
     renderProfile();
     hideAllScreens();
@@ -2601,6 +2921,7 @@ if (perfToggleBtn) {
 
 [['playBtn', () => { numPlayers = 1; startTrack(currentTrackIndex); }],
  ['twoPlayerBtn', () => { numPlayers = 2; startTrack(currentTrackIndex); }],
+ ['sumoBtn', () => { startSumo(); }],
  ['garageBtn', showGarage],
  ['garageBackBtn', showHome], ['menuBackBtn', showHome]].forEach(([id, fn]) => {
     const el = document.getElementById(id);
@@ -2615,8 +2936,8 @@ function handleResize() {
     if (!renderer || !camera) return;
     const w = window.innerWidth, h = window.innerHeight;
     renderer.setSize(w, h);
-    // Split-screen halves are w/2 wide; single player uses the full width.
-    const aspect = numPlayers === 2 ? (w / 2) / h : w / h;
+    // Sumo renders one full-screen view; split-screen halves are w/2 wide.
+    const aspect = (numPlayers === 2 && gameMode !== 'sumo') ? (w / 2) / h : w / h;
     cameras.forEach(c => { c.aspect = aspect; c.updateProjectionMatrix(); });
     updateJoystickCenter();
     setupMinimap();
@@ -3059,6 +3380,37 @@ function fxFlame(x, y, z, heading) {
     _flame.vy[i] = 0.03 + Math.random() * 0.03;
     _flame.vz[i] = -fz * (0.12 + Math.random() * 0.08);
     _flame.life[i] = 1.0;
+}
+
+// Expanding shockwave ring shown where a PULSE was fired. Grows outward to the
+// pulse radius and fades, then disposes itself.
+function spawnPulseRing(r) {
+    if (!scene || typeof THREE === 'undefined') return;
+    const geo = new THREE.TorusGeometry(1, 0.35, 8, 40);
+    const mat = new THREE.MeshBasicMaterial({
+        color: 0x19D7FF, transparent: true, opacity: 0.85, depthWrite: false
+    });
+    const ring = new THREE.Mesh(geo, mat);
+    ring.rotation.x = Math.PI / 2;          // lie flat on the ground
+    ring.position.set(r.x, r.y + 0.4, r.z);
+    scene.add(ring);
+    pulseRings.push({ mesh: ring, life: 1 });
+}
+
+function updatePulses() {
+    for (let i = pulseRings.length - 1; i >= 0; i--) {
+        const pr = pulseRings[i];
+        pr.life -= 0.045;
+        const s = 1 + (1 - pr.life) * PULSE_RADIUS;
+        pr.mesh.scale.set(s, s, 1);
+        pr.mesh.material.opacity = Math.max(0, pr.life * 0.85);
+        if (pr.life <= 0) {
+            scene.remove(pr.mesh);
+            pr.mesh.geometry.dispose();
+            pr.mesh.material.dispose();
+            pulseRings.splice(i, 1);
+        }
+    }
 }
 
 let _lastPtTime = performance.now();

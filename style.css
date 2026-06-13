@@ -873,6 +873,56 @@ body.splitscreen #menuBtn {
     color: var(--gold);
 }
 
+/* ---------- Sumo mode HUD ---------- */
+#sumoHud {
+    position: fixed;
+    top: max(10px, env(safe-area-inset-top));
+    left: 0;
+    right: 0;
+    z-index: 116;
+    visibility: hidden;
+    pointer-events: none;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 0 max(14px, env(safe-area-inset-left));
+}
+.sumo-side {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 12px;
+    border-radius: 12px;
+    background: rgba(11, 14, 20, 0.62);
+    border: 1px solid var(--stroke);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    font-family: var(--font-display);
+    color: var(--text-hi);
+}
+.sumo-score {
+    font-size: 22px;
+    font-weight: 700;
+    min-width: 18px;
+    text-align: center;
+}
+.sumo-center {
+    margin-top: 8px;
+    font-family: var(--font-display);
+    font-weight: 700;
+    letter-spacing: 2px;
+    font-size: 15px;
+    color: var(--cyan);
+    text-shadow: 0 0 10px rgba(25, 215, 255, 0.5);
+}
+.sumo-side .sp-boost-track {
+    width: 64px;
+    height: 8px;
+    border-radius: 4px;
+    background: rgba(143, 168, 205, 0.18);
+    overflow: hidden;
+}
+
 /* ---------- Rotate hint (small, non-blocking banner) ---------- */
 #rotateHint {
     position: fixed;
