@@ -38,8 +38,10 @@ const sumo = {
     startRadius: 42, minRadius: 11, radius: 42,
     shrink: (42 - 11) / (40 * 60),   // shrink to minimum over ~40s
     platform: null, rim: null, baseR: 42,
-    score: [0, 0]
+    score: [0, 0],
+    camLatch: [false, false]         // edge-detect each pad's X (camera cycle)
 };
+const SUMO_CAM_MODES = 3;            // 0 chase, 1 overhead, 2 arena overview
 
 // Track data
 let trackCurve;
@@ -151,7 +153,7 @@ const hud = {
 };
 
 // Patch / build number shown top-left. Bump this with each gameplay update.
-const VERSION = 'v1.16.0';
+const VERSION = 'v1.16.1';
 if (hud.build) hud.build.textContent = VERSION;
 
 // Live FPS, averaged over a short window so the readout is steady.
@@ -1345,6 +1347,7 @@ function makeRacer(opts) {
         lap: 1, progress: 0, lastProgress: 0, lastIndex: 0,
         finished: false, finishTime: null, finishOrder: 0,
         falling: false, eliminated: false,   // sumo: off-platform / knocked out
+        camMode: 0,                          // sumo: per-player camera perspective
         boostTime: 0,
         boostCharge: 0,
         bestLap: null, lapStartTime: 0,
@@ -1637,9 +1640,11 @@ function stepSumoRacer(r, ctrl) {
     const rawTh = clamp(ctrl.throttle || 0, -1, 1);
 
     if (sumo.started && !r.falling) {
-        if (rawTh >= 0) {
-            r.vx += fX * r.accel; r.vz += fZ * r.accel;
-        } else {
+        // Unlike racing, sumo cars do NOT auto-creep: they only move when a
+        // player actively pushes the stick. So accelerate only on real input.
+        if (rawTh > 0) {
+            r.vx += fX * r.accel * rawTh; r.vz += fZ * r.accel * rawTh;
+        } else if (rawTh < 0) {
             const f = (fwd > 0.02) ? r.brakePower : r.reverseAccel;
             r.vx -= fX * f * (-rawTh); r.vz -= fZ * f * (-rawTh);
         }
@@ -1928,11 +1933,6 @@ function animate() {
 // confines each camera to its half of the canvas (left = P1, right = P2).
 function renderScene() {
     const w = window.innerWidth, h = window.innerHeight;
-    if (gameMode === 'sumo') {            // single shared camera over the arena
-        renderer.setViewport(0, 0, w, h);
-        renderer.render(scene, cameras[0]);
-        return;
-    }
     if (numPlayers === 2) {
         renderer.setScissorTest(true);
         // Left half — player 1
@@ -2377,16 +2377,58 @@ function placeSumoRacers() {
     set(players[1],  spawn, -Math.PI / 2);  // right car faces -x
     if (sumo.platform) sumo.platform.scale.set(1, 1, 1);
     if (sumo.rim) sumo.rim.scale.set(1, 1, 1);
-    positionSumoCamera();
+    positionSumoCameras(true);
 }
 
-function positionSumoCamera() {
-    const cam = cameras[0];
-    const r = sumo.radius;
-    // Angled overhead view that tightens as the platform shrinks.
-    cam.position.set(0, r * 1.55 + 16, r * 1.25 + 16);
-    cam.lookAt(0, 0, 0);
-    if (cam.fov !== 50) { cam.fov = 50; cam.updateProjectionMatrix(); }
+// Split-screen sumo: each player gets their own camera with a cyclable
+// perspective (chase / overhead / arena overview), changed with the X button.
+function setCamFov(cam, fov) {
+    if (Math.abs(cam.fov - fov) > 0.01) { cam.fov = fov; cam.updateProjectionMatrix(); }
+}
+
+function placeSumoCam(cam, p, snap) {
+    const mode = p.camMode || 0;
+    const fx = Math.sin(p.heading), fz = Math.cos(p.heading);
+    let dest, look, fov;
+    if (mode === 0) {            // chase: behind and above the car
+        dest = new THREE.Vector3(p.x - fx * 15, p.y + 8.5, p.z - fz * 15);
+        look = new THREE.Vector3(p.x + fx * 7, p.y + 1.5, p.z + fz * 7);
+        fov = 62;
+    } else if (mode === 1) {     // overhead: top-down following the car
+        dest = new THREE.Vector3(p.x, p.y + 42, p.z + 0.01);
+        look = new THREE.Vector3(p.x, p.y, p.z);
+        fov = 55;
+    } else {                     // arena overview: whole shrinking platform
+        const r = sumo.radius;
+        dest = new THREE.Vector3(0, r * 1.55 + 16, r * 1.3 + 16);
+        look = new THREE.Vector3(0, 0, 0);
+        fov = 50;
+    }
+    if (snap) cam.position.copy(dest);
+    else cam.position.lerp(dest, 0.18);
+    cam.lookAt(look.x, look.y, look.z);
+    setCamFov(cam, fov);
+}
+
+function positionSumoCameras(snap) {
+    players.forEach((p, i) => placeSumoCam(cameras[i], p, snap));
+}
+
+function cycleSumoCam(idx) {
+    const p = players[idx];
+    if (p) p.camMode = ((p.camMode || 0) + 1) % SUMO_CAM_MODES;
+}
+
+// Edge-detect the X button (face button index 2) on each pad to cycle cameras.
+function pollSumoCameraButtons() {
+    const list = connectedPads();
+    for (let i = 0; i < 2; i++) {
+        const gp = list[i];
+        if (!gp) { sumo.camLatch[i] = false; continue; }
+        const x = !!(gp.buttons[2] && gp.buttons[2].pressed);
+        if (x && !sumo.camLatch[i]) cycleSumoCam(i);
+        sumo.camLatch[i] = x;
+    }
 }
 
 function beginSumo() {
@@ -2397,6 +2439,7 @@ function beginSumo() {
 function updateSumo() {
     pollKeyboard();
     pollGamepad();
+    pollSumoCameraButtons();
 
     if (sumo.started && sumo.radius > sumo.minRadius) {
         sumo.radius = Math.max(sumo.minRadius, sumo.radius - sumo.shrink);
@@ -2420,7 +2463,7 @@ function updateSumo() {
         if (sumo.rim) sumo.rim.scale.set(s, 1, s);
     }
 
-    positionSumoCamera();
+    positionSumoCameras(false);
 
     if (sumo.started && !sumo.over) {
         const alive = players.filter(p => !p.eliminated);
@@ -2492,12 +2535,14 @@ function updateSumoHUD() {
 }
 
 function setSumoHudVisible(on) {
-    document.body.classList.remove('splitscreen');
+    // Sumo is split-screen, so recenter the settings button onto the divider.
+    document.body.classList.toggle('splitscreen', on);
     const v = (id, vis) => {
         const el = document.getElementById(id);
         if (el) el.style.visibility = vis ? 'visible' : 'hidden';
     };
-    ['speedHud', 'abilities', 'joystick', 'minimap', 'splitHud', 'splitDivider'].forEach(id => v(id, false));
+    ['speedHud', 'abilities', 'joystick', 'minimap', 'splitHud'].forEach(id => v(id, false));
+    v('splitDivider', on);
     v('menuBtn', on);
     v('sumoHud', on);
     if (on) document.getElementById('finishOverlay').classList.remove('show');
@@ -2936,8 +2981,8 @@ function handleResize() {
     if (!renderer || !camera) return;
     const w = window.innerWidth, h = window.innerHeight;
     renderer.setSize(w, h);
-    // Sumo renders one full-screen view; split-screen halves are w/2 wide.
-    const aspect = (numPlayers === 2 && gameMode !== 'sumo') ? (w / 2) / h : w / h;
+    // Split-screen (2P race + sumo) halves are w/2 wide; 1P uses full width.
+    const aspect = numPlayers === 2 ? (w / 2) / h : w / h;
     cameras.forEach(c => { c.aspect = aspect; c.updateProjectionMatrix(); });
     updateJoystickCenter();
     setupMinimap();
@@ -3070,6 +3115,11 @@ document.addEventListener('keydown', (e) => {
     const key = e.key.toLowerCase();
     if (key === ' ' || key === 'spacebar') { e.preventDefault(); inputs[0].boost = true; return; }
     if (key === 'enter') { e.preventDefault(); inputs[1].boost = true; return; }
+    // Sumo camera cycle (keyboard mirror of the X button): q = P1, p = P2.
+    if (gameMode === 'sumo') {
+        if (key === 'q') { e.preventDefault(); cycleSumoCam(0); return; }
+        if (key === 'p') { e.preventDefault(); cycleSumoCam(1); return; }
+    }
     const m = keyMap[key];
     if (m) { e.preventDefault(); keys[m[0]][m[1]] = true; }
 });
